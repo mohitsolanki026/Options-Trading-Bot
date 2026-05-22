@@ -49,27 +49,38 @@ OLLAMA_MODEL      = os.getenv("OLLAMA_MODEL", "llama3")
 
 INDICES = {
     "NIFTY": {
-        "symbol":   "Nifty 50",
-        "token":    "26000",
-        "name":     "NIFTY",
-        "lot_size": 75,
-        "strike_gap": 50,
+        "name":         "NIFTY",
+        "symbol":       "Nifty 50",
+        "token":        "26000",
+        "scrip_name":   "NIFTY",
+        "lot_size":     75,
+        "strike_gap":   50,
+        "expiry_day":   3,      # Thursday (0=Mon, 3=Thu)
     },
     "BANKNIFTY": {
-        "symbol":   "NIFTY BANK",
-        "token":    "26009",
-        "name":     "BANKNIFTY",
-        "lot_size": 30,
-        "strike_gap": 100,
+        "name":         "BANKNIFTY",
+        "symbol":       "NIFTY BANK",
+        "token":        "26009",
+        "scrip_name":   "BANKNIFTY",
+        "lot_size":     30,
+        "strike_gap":   100,
+        "expiry_day":   2,      # Wednesday
     },
     "FINNIFTY": {
-        "symbol":   "NIFTY FIN SERVICE",
-        "token":    "26037",
-        "name":     "FINNIFTY",
-        "lot_size": 40,
-        "strike_gap": 50,
+        "name":         "FINNIFTY",
+        "symbol":       "NIFTY FIN SERVICE",
+        "token":        "26037",
+        "scrip_name":   "FINNIFTY",
+        "lot_size":     40,
+        "strike_gap":   50,
+        "expiry_day":   1,      # Tuesday
     },
 }
 
-# Which index to trade today — change this one line
+ACTIVE_INDICES = ["NIFTY", "BANKNIFTY"]
+
+# Primary index for single-index operations
 ACTIVE_INDEX = "NIFTY"
+
+INDIA_VIX_SYMBOL = "India VIX"
+INDIA_VIX_TOKEN  = "99926017"

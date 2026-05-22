@@ -9,7 +9,6 @@ from utils.signal_engine import run_confluence
 from utils.llm_brain import get_trade_decision
 from utils.trade_journal import log_signal
 from utils.telegram_helper import send_message, send_alert
-from utils.telegram_helper import send_message
 from config.settings import INDICES, ACTIVE_INDEX
 
 logger = logging.getLogger(__name__)

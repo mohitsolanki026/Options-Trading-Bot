@@ -26,9 +26,10 @@ def get_angel_client():
         )
 
         if data["status"]:
-            feed_token = data["data"]["feedToken"]
+            auth_token  = data["data"]["jwtToken"]    # ← JWT token
+            feed_token  = data["data"]["feedToken"]   # ← feed token
             logger.info("✅ Angel One login successful!")
-            return obj, feed_token
+            return obj, auth_token, feed_token 
         else:
             logger.error(f"❌ Login failed: {data}")
             return None

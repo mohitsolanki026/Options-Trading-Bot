@@ -138,7 +138,7 @@ def build_market_prompt(
     Stop Loss  : ₹{position.get('stop_loss')}
     """
 
-    logger.debug(f"Building LLM prompt with market data: {summary}, greeks: {greeks}, regime: {regime}, confluence: {confluence}, risk_status: {risk_status}, position: {position}")
+    logger.info(f"📊 current Position {position_block}")
 
     prompt = f"""
 You are an expert Indian options trader AI. Analyse the following real-time market data and make a precise trading decision.

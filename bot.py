@@ -19,6 +19,9 @@ from utils.trade_journal import (
     get_weekly_summary, print_today_signals
 )
 from utils.paper_trader import PaperTrader
+from utils.websocket_feed import WebSocketFeed
+from utils.tick_monitor import TickMonitor
+from utils.index_scanner import scan_index
 
 idx = INDICES[ACTIVE_INDEX]
 
@@ -47,20 +50,28 @@ STATE = {
     "decision":         None,
     "risk_manager":     None,
     "paper_trader":     PaperTrader(starting_capital=100000),  # ← add this
-    "current_position": None,
+ # Per-index state — keyed by index name
+    "index_data":        {},   # {"NIFTY": {...}, "BANKNIFTY": {...}}
+    "current_positions": {},   # {"NIFTY": pos or None, "BANKNIFTY": None}
+    "current_position":  None,
+    "nifty_ltp":         None,
     "capital":          100000,
+    "auth_token":  None,   # ← add
+    "feed_token":  None,   # ← add
+    "ws_feed":     None,   # ← add
+    "ce_token":    None,   # ← add (ATM CE instrument token)
+    "pe_token":    None,   # ← add (ATM PE instrument token)
 }
 
 def init_client():
     """Login to Angel One and load scrip master."""
     logger.info("🔐 Logging into Angel One...")
-    obj, feed_token = get_angel_client()
+    obj, auth_token, feed_token = get_angel_client()   # ← three values now
+    if not obj:
+        send_error("Login FAILED!")
+        raise Exception("Login failed")
     STATE["obj"]        = obj
     STATE["feed_token"] = feed_token
-    if not obj:
-        send_error("Angel One login FAILED at startup!")
-        raise Exception("Login failed")
-    STATE["obj"] = obj
 
     logger.info("📥 Loading scrip master...")
     from datetime import datetime as dt
@@ -76,6 +87,11 @@ def init_client():
 
     logger.info(f"✅ Using expiry: {STATE['expiry']}")
     send_alert("Bot Online", f"Logged in ✅\nExpiry: {STATE['expiry']}", emoji="🤖")
+    ws = WebSocketFeed(auth_token, feed_token)         # ← correct args
+    ws.subscribe("NSE", ["26000", "99926017"])
+    ws.start()
+    STATE["ws_feed"] = ws
+    logger.info("📡 WebSocket feed started.")
 
     # ── ADD THIS BLOCK AT THE BOTTOM ──────────────
     pt             = STATE["paper_trader"]
@@ -144,6 +160,30 @@ def market_open_scan():
 
     df_oi   = fetch_oi_data(obj, options_df, nifty_ltp, num_strikes=10)
     summary = summarise_options_chain(df_oi, nifty_ltp)
+
+    # Subscribe ATM CE + PE tokens to WebSocket
+    atm_strike = summary["atm_strike"]
+    atm_ce = options_df[
+        (options_df["strike"] == atm_strike * 100) &
+        (options_df["symbol"].str.endswith("CE"))
+    ]
+    atm_pe = options_df[
+        (options_df["strike"] == atm_strike * 100) &
+        (options_df["symbol"].str.endswith("PE"))
+    ]
+
+    if not atm_ce.empty and not atm_pe.empty:
+        ce_token = str(atm_ce.iloc[0]["token"])
+        pe_token = str(atm_pe.iloc[0]["token"])
+
+        STATE["ce_token"] = ce_token
+        STATE["pe_token"] = pe_token
+
+        ws = STATE.get("ws_feed")
+        if ws:
+            ws.subscribe("NFO", [ce_token, pe_token])
+            logger.info(f"📡 Subscribed ATM: CE={ce_token} PE={pe_token}")
+
     STATE["summary"] = summary
     send_options_summary(summary)
 
@@ -400,6 +440,10 @@ if __name__ == "__main__":
         daemon = True,
         name   = "MonitorLoop"
     )
+    tick_mon = TickMonitor(STATE)
+    tick_mon.start()
+    logger.info("⚡ Tick monitor started.")
     monitor_thread.start()
+    
     logger.info("👁️ Monitor thread started.")
     start_scheduler(jobs)

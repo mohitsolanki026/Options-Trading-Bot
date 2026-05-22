@@ -37,6 +37,22 @@ def get_nifty_options(df, expiry: str):
     logger.info(f"✅ Found {len(options)} Nifty option contracts for expiry {expiry}")
     return options
 
+def get_index_options(df, index_name: str, expiry: str):
+    """
+    Get options for any index — NIFTY, BANKNIFTY, FINNIFTY.
+    """
+    options = df[
+        (df["name"] == index_name) &
+        (df["instrumenttype"] == "OPTIDX") &
+        (df["exch_seg"] == "NFO") &
+        (df["expiry"] == expiry)
+    ].copy()
+
+    options["strike"] = options["strike"].astype(float) / 100
+    options = options.sort_values("strike")
+    logger.info(f"✅ Found {len(options)} {index_name} contracts for {expiry}")
+    return options
+
 
 def get_available_expiries(df, name="NIFTY"):
     """List all available expiry dates for Nifty options."""
@@ -48,6 +64,19 @@ def get_available_expiries(df, name="NIFTY"):
     expiries = sorted(options["expiry"].unique().tolist())
     return expiries
 
+def get_available_expiries_for_index(df, index_name: str):
+    """Get sorted expiry list for any index."""
+    from datetime import datetime as dt
+    options = df[
+        (df["name"] == index_name) &
+        (df["instrumenttype"] == "OPTIDX") &
+        (df["exch_seg"] == "NFO")
+    ]
+    expiries = sorted(
+        options["expiry"].unique().tolist(),
+        key=lambda e: dt.strptime(e, "%d%b%Y") if len(e) == 9 else dt.max
+    )
+    return expiries
 
 def fetch_oi_data(obj, options_df, nifty_spot: float, num_strikes: int = 10):
     """
