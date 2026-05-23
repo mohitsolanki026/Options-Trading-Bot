@@ -131,7 +131,7 @@ def log_signal(
         float(summary["max_pain"]),
         float(greeks["avg_iv"]),
         greeks["days_to_exp"],
-        float(greeks["theta"]),
+        float(greeks["theta"] or 0.0),
         regime["regime"],
         confluence["score"],
         confluence["overall_bias"],

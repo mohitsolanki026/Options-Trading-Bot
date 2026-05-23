@@ -12,7 +12,7 @@ from utils.telegram_helper import (
     send_alert, send_error
 )
 from utils.scheduler import start_scheduler
-from config.settings import INDICES, ACTIVE_INDEX
+from config.settings import INDICES, ACTIVE_INDEX, ACTIVE_INDICES, INDIA_VIX_SYMBOL, INDIA_VIX_TOKEN
 # Add at top of bot.py after imports
 from utils.trade_journal import (
     init_db, log_signal, update_daily_summary,
@@ -23,7 +23,7 @@ from utils.websocket_feed import WebSocketFeed
 from utils.tick_monitor import TickMonitor
 from utils.index_scanner import scan_index
 
-idx = INDICES[ACTIVE_INDEX]
+idx = INDICES[ACTIVE_INDEX] 
 
 logging.basicConfig(
     level=logging.INFO,
@@ -117,246 +117,135 @@ def init_client():
 #  JOB 1 — Pre-Market Scan (8:45 AM)
 # ─────────────────────────────────────────
 def pre_market_scan():
-    """
-    Runs at 8:45 AM.
-    Fetches global snapshot before market opens.
-    """
+    """Runs at 8:45 AM."""
     logger.info("🌅 Pre-market scan starting...")
     obj = STATE["obj"]
 
-    nifty_ltp = fetch_ltp(obj, "NSE", "Nifty 50", "26000")
-    vix_ltp   = fetch_ltp(obj, "NSE", "India VIX", "99926017")
+    vix_ltp = fetch_ltp(obj, "NSE", INDIA_VIX_SYMBOL, INDIA_VIX_TOKEN)
+    STATE["vix_ltp"] = vix_ltp
 
-    STATE["nifty_ltp"] = nifty_ltp
-    STATE["vix_ltp"]   = vix_ltp
+    lines = [f"🌅 <b>Pre-Market Snapshot</b>\n━━━━━━━━━━━━━━━━━━"]
+    for index_key in ACTIVE_INDICES:
+        idx     = INDICES[index_key]
+        ltp     = fetch_ltp(obj, "NSE", idx["symbol"], idx["token"])
+        lines.append(f"<b>{index_key}</b> : ₹{ltp}")
 
-    send_market_update(nifty_ltp, vix_ltp)
+    lines.append(f"VIX      : {vix_ltp}")
+    lines.append(f"━━━━━━━━━━━━━━━━━━")
 
-    # VIX alert
     if vix_ltp and vix_ltp > 20:
-        send_alert(
-            "⚠️ HIGH VIX WARNING",
-            f"VIX is {vix_ltp} — market is fearful.\nConsider buying options, avoid naked shorts.",
-            emoji="😨"
-        )
+        lines.append("⚠️ HIGH VIX — avoid naked shorts")
 
-    logger.info(f"✅ Pre-market done. Nifty={nifty_ltp}, VIX={vix_ltp}")
+    from utils.telegram_helper import send_message
+    send_message("\n".join(lines))
+    logger.info(f"✅ Pre-market done. VIX={vix_ltp}")
 
 
 # ─────────────────────────────────────────
 #  JOB 2 — Market Open Scan (9:30 AM)
 # ─────────────────────────────────────────
 def market_open_scan():
-    """Runs at 9:30 AM."""
+    """Runs at 9:30 AM — scans all active indices."""
     logger.info("📈 Market open scan starting...")
-    obj        = STATE["obj"]
-    options_df = STATE["options_df"]
+    obj     = STATE["obj"]
+    vix_ltp = fetch_ltp(obj, "NSE", INDIA_VIX_SYMBOL, INDIA_VIX_TOKEN)
+    STATE["vix_ltp"] = vix_ltp
 
-    nifty_ltp = fetch_ltp(obj, "NSE", idx["symbol"], idx["token"])
-    vix_ltp   = fetch_ltp(obj, "NSE", "India VIX", "99926017")
+    if not STATE.get("risk_manager"):
+        from utils.risk_manager import RiskManager
+        STATE["risk_manager"] = RiskManager()
 
-    STATE["nifty_ltp"] = nifty_ltp
-    STATE["vix_ltp"]   = vix_ltp
+    from utils.index_scanner import scan_index
 
-    df_oi   = fetch_oi_data(obj, options_df, nifty_ltp, num_strikes=10)
-    summary = summarise_options_chain(df_oi, nifty_ltp)
+    results = {}
+    for index_key in ACTIVE_INDICES:
+        try:
+            result = scan_index(
+                obj               = obj,
+                df_scrip          = STATE["df_scrip"],
+                index_key         = index_key,
+                vix_ltp           = vix_ltp,
+                risk_manager      = STATE["risk_manager"],
+                paper_trader      = STATE["paper_trader"],
+                current_positions = STATE["current_positions"],
+            )
+            results[index_key] = result
 
-    # Subscribe ATM CE + PE tokens to WebSocket
+            # Update STATE for primary index (backward compat)
+            if index_key == ACTIVE_INDEX:
+                STATE["summary"]    = result.get("summary")
+                STATE["greeks"]     = result.get("greeks")
+                STATE["regime"]     = result.get("regime")
+                STATE["confluence"] = result.get("confluence")
+                STATE["decision"]   = result.get("decision")
+                STATE["nifty_ltp"]  = result.get("spot_ltp")
+                STATE["options_df"] = result.get("options_df")
+                STATE["expiry"]     = result.get("expiry")
+
+                # Subscribe ATM tokens to WebSocket
+                _subscribe_atm_tokens(result)
+
+        except Exception as e:
+            logger.error(f"❌ Error scanning {index_key}: {e}")
+
+    STATE["index_data"] = results
+
+    # Best opportunity summary
+    _send_best_opportunity(results)
+    logger.info("✅ All indices scanned.")
+
+def _subscribe_atm_tokens(result: dict):
+    """Subscribe ATM CE + PE tokens to WebSocket."""
+    ws = STATE.get("ws_feed")
+    if not ws:
+        return
+
+    options_df = result.get("options_df")
+    summary    = result.get("summary")
+    if options_df is None or summary is None:
+        return
+
     atm_strike = summary["atm_strike"]
     atm_ce = options_df[
-        (options_df["strike"] == atm_strike * 100) &
+        (options_df["strike"] == atm_strike) &
         (options_df["symbol"].str.endswith("CE"))
     ]
     atm_pe = options_df[
-        (options_df["strike"] == atm_strike * 100) &
+        (options_df["strike"] == atm_strike) &
         (options_df["symbol"].str.endswith("PE"))
     ]
 
     if not atm_ce.empty and not atm_pe.empty:
         ce_token = str(atm_ce.iloc[0]["token"])
         pe_token = str(atm_pe.iloc[0]["token"])
-
         STATE["ce_token"] = ce_token
         STATE["pe_token"] = pe_token
+        ws.subscribe("NFO", [ce_token, pe_token])
+        logger.info(f"📡 ATM subscribed: CE={ce_token} PE={pe_token}")
 
-        ws = STATE.get("ws_feed")
-        if ws:
-            ws.subscribe("NFO", [ce_token, pe_token])
-            logger.info(f"📡 Subscribed ATM: CE={ce_token} PE={pe_token}")
+def _send_best_opportunity(results: dict):
+    """Highlight the best trade opportunity across all indices."""
+    best       = None
+    best_score = 0
 
-    STATE["summary"] = summary
-    send_options_summary(summary)
+    for key, result in results.items():
+        if not result:
+            continue
+        score = result.get("confluence", {}).get("score", 0)
+        if score > best_score:
+            best_score = score
+            best       = (key, result)
 
-    from utils.greeks_engine import analyse_atm_greeks
-    greeks = analyse_atm_greeks(summary, STATE["expiry"])
-    STATE["greeks"] = greeks
-
-    # ── EXPIRY CHECK HERE (after greeks is defined) ──
-    if greeks.get("days_to_exp", 1) == 0 and STATE.get("current_position"):
-        logger.warning("⏰ EXPIRY DAY — closing open position immediately.")
-        send_alert("⏰ Expiry Day Exit", "Closing open position — expiry day.", emoji="⏰")
-        from utils.monitor import handle_exit
-        handle_exit(STATE, {"reasoning": "Expiry day forced exit"}, nifty_ltp)
-
-    # Send Greeks to Telegram
-    from utils.telegram_helper import send_message
-    greeks_msg = (
-        f"🧮 <b>ATM Greeks — {STATE['expiry']}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"📅 Days to Expiry : {greeks['days_to_exp']}\n"
-        f"📊 Avg IV         : {greeks['avg_iv']}%\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"CE IV    : {greeks['ce_iv']}%\n"
-        f"PE IV    : {greeks['pe_iv']}%\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"Delta CE : {greeks['ce_delta']}\n"
-        f"Delta PE : {greeks['pe_delta']}\n"
-        f"Gamma    : {greeks['gamma']}\n"
-        f"Theta    : ₹{greeks['theta']}/day\n"
-        f"Vega     : {greeks['vega']}\n"
-        f"━━━━━━━━━━━━━━━━━━"
-    )
-    send_message(greeks_msg)
-    logger.info(f"✅ Greeks: {greeks}")
-
-    # Market Regime Detection
-    from utils.regime_detector import detect_regime
-    regime = detect_regime(
-        vix            = STATE["vix_ltp"],
-        pcr            = float(summary["pcr"]),
-        days_to_expiry = greeks["days_to_exp"],
-        nifty_spot     = summary["nifty_spot"],
-        support        = float(summary["support"]),
-        resistance     = float(summary["resistance"]),
-        avg_iv         = float(greeks["avg_iv"] or 0.0),    )
-    STATE["regime"] = regime
-
-    # Signal Confluence
-    from utils.signal_engine import run_confluence
-    confluence = run_confluence(
-        pcr            = float(summary["pcr"]),
-        sentiment      = summary["sentiment"],
-        support        = float(summary["support"]),
-        resistance     = float(summary["resistance"]),
-        nifty_spot     = summary["nifty_spot"],
-        avg_iv         = float(greeks["avg_iv"]),
-        vix            = STATE["vix_ltp"],
-        days_to_expiry = greeks["days_to_exp"],
-        theta          = float(greeks["theta"] or 0.0),
-        regime         = regime["regime"],
-    )
-    STATE["confluence"] = confluence
-
-    # Claude Brain Decision
-    from utils.llm_brain import get_trade_decision
-    from utils.risk_manager import RiskManager
-
-    if not STATE.get("risk_manager"):
-        STATE["risk_manager"] = RiskManager()
-
-    risk_status = STATE["risk_manager"].get_status()
-
-    decision = get_trade_decision(
-        summary     = summary,
-        greeks      = greeks,
-        regime      = regime,
-        confluence  = confluence,
-        risk_status = risk_status,
-        vix         = STATE["vix_ltp"],
-        position    = STATE.get("current_position"),
-    )
-    STATE["decision"] = decision
-
-    # Log everything to journal
-    log_signal(
-        index_name = idx["name"],
-        summary    = summary,
-        greeks     = greeks,
-        regime     = regime,
-        confluence = confluence,
-        decision   = decision,
-        vix        = STATE["vix_ltp"],
-    )
-
-    # Send decision to Telegram
-    action_emoji = {
-        "ENTER": "🟢", "HOLD": "🔵",
-        "ADJUST": "🟡", "EXIT": "🔴", "SKIP": "⚪"
-    }.get(decision.get("action"), "❓")
-
-    decision_msg = (
-        f"{action_emoji} <b>Claude AI Decision</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"Action     : <b>{decision.get('action')}</b>\n"
-        f"Confidence : {decision.get('confidence')}\n"
-        f"Strategy   : {decision.get('strategy')}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"Stop Loss  : {decision.get('stop_loss')}\n"
-        f"Target     : {decision.get('target')}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"📝 <b>Reasoning:</b>\n{decision.get('reasoning')}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"⚠️ <b>Risk:</b> {decision.get('risk_warning')}\n"
-        f"━━━━━━━━━━━━━━━━━━"
-    )
-    send_message(decision_msg)
-    logger.info(f"✅ Claude decision: {decision.get('action')}")
-
-    # Build signal breakdown
-    signal_lines = "\n".join([
-        f"  {'✅' if s['score'] else '❌'} {s['label']}: {s['value']}"
-        for s in confluence["signals"]
-    ])
-
-    confluence_msg = (
-        f"🎯 <b>Signal Confluence</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"Score  : {confluence['score']}/{confluence['max_score']}\n"
-        f"Bias   : {confluence['overall_bias']}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"{signal_lines}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"<b>{confluence['decision']}</b>\n"
-        f"Strategy: {regime['strategy']}\n"
-        f"━━━━━━━━━━━━━━━━━━"
-    )
-    send_message(confluence_msg)
-    logger.info(f"✅ Confluence: {confluence['score']}/{confluence['max_score']} → {confluence['decision']}")
-
-    # Send regime to Telegram
-    regime_msg = (
-        f"{regime['emoji']} <b>Market Regime</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"Regime     : <b>{regime['regime_label']}</b>\n"
-        f"Confidence : {regime['confidence']}\n"
-        f"Strategy   : 💡 {regime['strategy']}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"<b>Reasons:</b>\n"
-        + "\n".join([f"  • {r}" for r in regime["reasons"]]) +
-        f"\n━━━━━━━━━━━━━━━━━━"
-    )
-    send_message(regime_msg)
-    logger.info(f"✅ Regime detected: {regime['regime']}")
-
-    # Key level alerts
-    spot      = summary["nifty_spot"]
-    support   = summary["support"]
-    resistance = summary["resistance"]
-
-    if spot < support + 50:
+    if best and best_score >= 4:
+        key, result = best
         send_alert(
-            "🛡️ Near Support",
-            f"Nifty ₹{spot} is near support {support}.\nWatch for bounce or breakdown.",
-            emoji="🟡"
+            f"🏆 Best Opportunity: {key}",
+            f"Score    : {best_score}/6\n"
+            f"Regime   : {result['regime']['regime_label']}\n"
+            f"Strategy : {result['decision'].get('strategy')}\n"
+            f"Action   : {result['decision'].get('action')}",
+            emoji="🏆"
         )
-    elif spot > resistance - 50:
-        send_alert(
-            "🚧 Near Resistance",
-            f"Nifty ₹{spot} is near resistance {resistance}.\nWatch for breakout or rejection.",
-            emoji="🟡"
-        )
-
-    logger.info(f"✅ Market open scan done. Summary: {summary}")
 
 
 # ─────────────────────────────────────────
