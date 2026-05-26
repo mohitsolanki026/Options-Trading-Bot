@@ -38,7 +38,6 @@ def fetch_candles(obj, token: str, interval: str = "FIVE_MINUTE",
             "todate":      to_str,
         }
 
-        logger.info(f"⏳ Fetching candles for {params}")
 
         response = obj.getCandleData(params)
 
@@ -46,8 +45,6 @@ def fetch_candles(obj, token: str, interval: str = "FIVE_MINUTE",
             logger.error(f"❌ Candle data error: {response}")
             return pd.DataFrame()
         
-        logger.info(f"📈 {response}")
-
         data = response.get("data", [])
         if not data:
             return pd.DataFrame()
