@@ -15,7 +15,7 @@ if __name__ == "__main__":
         exit()
 
     # --- Live prices ---
-    nifty_ltp = fetch_ltp(obj, "NSE", "Nifty 50", "26000")
+    nifty_ltp = fetch_ltp(obj, "NSE", "Nifty 50", "99926000")
     vix_ltp   = fetch_ltp(obj, "NSE", "India VIX", "99926017")
 
     print(f"\n📊 Nifty: ₹{nifty_ltp} | VIX: {vix_ltp}")

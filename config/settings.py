@@ -23,10 +23,10 @@ RISK_RULES = {
 
 # --- Instruments ---
 NIFTY_SYMBOL     = "Nifty 50"
-NIFTY_TOKEN      = "26000"
+NIFTY_TOKEN      = "99926000"
 
 BANKNIFTY_SYMBOL = "NIFTY BANK"
-BANKNIFTY_TOKEN  = "26009"
+BANKNIFTY_TOKEN  = "99926009"
 
 INDIA_VIX_SYMBOL = "India VIX"
 INDIA_VIX_TOKEN  = "99926017"
@@ -51,7 +51,7 @@ INDICES = {
     "NIFTY": {
         "name":         "NIFTY",
         "symbol":       "Nifty 50",
-        "token":        "26000",
+        "token":        "99926000",
         "scrip_name":   "NIFTY",
         "lot_size":     75,
         "strike_gap":   50,
@@ -60,7 +60,7 @@ INDICES = {
     "BANKNIFTY": {
         "name":         "BANKNIFTY",
         "symbol":       "NIFTY BANK",
-        "token":        "26009",
+        "token":        "99926009",
         "scrip_name":   "BANKNIFTY",
         "lot_size":     30,
         "strike_gap":   100,

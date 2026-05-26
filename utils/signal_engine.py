@@ -128,6 +128,41 @@ def signal_expiry_theta(days_to_expiry: int, theta: float) -> dict:
         return {"score": 0, "label": "Theta/Expiry",
                 "value": f"{days_to_expiry} days to expiry — theta slow",
                 "bias": "NEUTRAL"}
+    
+def signal_technical_indicators(ta: dict) -> dict:
+    """
+    Signal 7: Technical indicators (RSI, MACD, EMA, Supertrend, VWAP).
+    Replaces the basic PCR-only technical signal with full TA.
+    """
+    if not ta or not ta.get("signals"):
+        return {"score": 0, "label": "Technical TA",
+                "value": "No TA data", "bias": "NEUTRAL"}
+
+    overall   = ta.get("overall", "NEUTRAL")
+    bull      = ta.get("bull_count", 0)
+    bear      = ta.get("bear_count", 0)
+    rsi       = ta.get("rsi", 50)
+    macd_bias = ta.get("macd", {}).get("bias", "NEUTRAL")
+
+    # Score 1 if 3+ indicators agree
+    if bull >= 3 or bear >= 3:
+        score = 1
+    else:
+        score = 0
+
+    if "BULLISH" in overall:
+        bias = "BULLISH"
+    elif "BEARISH" in overall:
+        bias = "BEARISH"
+    else:
+        bias = "NEUTRAL"
+
+    return {
+        "score": score,
+        "label": "Technical TA",
+        "value": f"RSI={rsi} MACD={macd_bias} → {overall}",
+        "bias":  bias,
+    }
 
 
 # ─────────────────────────────────────────
@@ -145,6 +180,7 @@ def run_confluence(
     days_to_expiry: int,
     theta: float,
     regime: str,
+    ta: dict = None,
 ) -> dict:
     """
     Runs all signals and returns a trade decision.
@@ -159,6 +195,8 @@ def run_confluence(
         signal_iv_rank(avg_iv, vix),
         signal_vix_direction(vix),
         signal_expiry_theta(days_to_expiry, theta),
+        signal_technical_indicators(ta or {}),  # ← add this
+
     ]
 
     total_score   = sum(s["score"] for s in signals)

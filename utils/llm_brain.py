@@ -126,6 +126,7 @@ def build_market_prompt(
     confluence:  dict,
     risk_status: dict,
     position:    dict = None,
+    ta:         dict = None,
 ) -> str:
     now = datetime.now().strftime("%d %b %Y %H:%M")
 
@@ -138,7 +139,21 @@ def build_market_prompt(
     Stop Loss  : ₹{position.get('stop_loss')}
     """
 
-    logger.info(f"📊 current Position {position_block}")
+    ta_block = ""
+    if ta and ta.get("signals"):
+        ta_lines = "\n".join([f"  - {s['name']}: {s['note']}"
+                              for s in ta["signals"]])
+        ta_block = f"""
+=== TECHNICAL ANALYSIS ===
+Overall    : {ta.get('overall')}
+RSI        : {ta.get('rsi')}
+MACD Bias  : {ta.get('macd', {}).get('bias')}
+EMA20 Bias : {ta.get('ema20', {}).get('bias')}
+Supertrend : {ta.get('supertrend', {}).get('bias')}
+VWAP Bias  : {ta.get('vwap', {}).get('bias')}
+Signals:
+{ta_lines}
+"""
 
     prompt = f"""
 You are an expert Indian options trader AI. Analyse the following real-time market data and make a precise trading decision.
@@ -165,6 +180,9 @@ Delta CE     : {greeks['ce_delta']}
 Delta PE     : {greeks['pe_delta']}
 Theta        : ₹{greeks['theta']}/day
 Vega         : {greeks['vega']}
+
+=== TA SIGNALS ===
+{ta_block if ta_block else "No technical analysis data available."}
 
 === REGIME & SIGNALS ===
 Market Regime   : {regime['regime_label']}
@@ -212,6 +230,8 @@ Rules:
 - Never suggest naked options without hedge
 - Respond ONLY with the JSON object, no explanation outside it
 """
+    
+    logger.info(f"📋 Built LLM prompt with current market data. {prompt}")
     return prompt.strip()
 
 
@@ -251,11 +271,13 @@ def get_trade_decision(
     risk_status: dict,
     vix:         float,
     position:    dict = None,
+    ta:         dict = None,
 ) -> dict:
     greeks_with_vix = {**greeks, "vix": vix}
     prompt   = build_market_prompt(
         summary, greeks_with_vix, regime,
         confluence, risk_status, position
+    , ta
     )
     try:
         raw      = call_llm(prompt)

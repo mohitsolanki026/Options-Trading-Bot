@@ -12,6 +12,7 @@ from utils.llm_brain import get_trade_decision
 from utils.trade_journal import log_signal
 from utils.telegram_helper import send_message, send_alert
 from config.settings import INDICES, INDIA_VIX_TOKEN, INDIA_VIX_SYMBOL
+from utils.technical import run_technical_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,16 @@ def scan_index(obj, df_scrip, index_key, vix_ltp, risk_manager, paper_trader, cu
             logger.warning(f"⚠️ Could not fetch spot for {index_key}")
             return {}
         logger.info(f"💹 {index_key} spot: ₹{spot_ltp}")
+
+        ta = run_technical_analysis(
+            obj      = obj,
+            token    = idx["token"],
+            interval = "FIFTEEN_MINUTE",
+            days_back = 5,
+        )
+
+        logger.info(f"📊 {index_key} TA: {ta.get('overall')} "
+            f"Bull={ta.get('bull_count')} Bear={ta.get('bear_count')}")
 
         # ── 3. Options chain + OI ──────────
         options_df = get_index_options(df_scrip, idx["scrip_name"], expiry)
@@ -72,6 +83,7 @@ def scan_index(obj, df_scrip, index_key, vix_ltp, risk_manager, paper_trader, cu
             days_to_expiry = greeks["days_to_exp"],
             theta          = float(greeks["theta"] or 0.0),
             regime         = regime["regime"],
+            ta             = ta,
         )
 
         # ── 7. LLM decision ───────────────
@@ -85,6 +97,7 @@ def scan_index(obj, df_scrip, index_key, vix_ltp, risk_manager, paper_trader, cu
             risk_status = risk_status,
             vix         = vix_ltp,
             position    = position,
+            ta          = ta,
         )
 
         # ── 8. Log ────────────────────────
@@ -100,7 +113,7 @@ def scan_index(obj, df_scrip, index_key, vix_ltp, risk_manager, paper_trader, cu
 
         # ── 9. Telegram ───────────────────
         _send_index_summary(index_key, spot_ltp, summary,
-                            greeks, regime, confluence, decision, expiry)
+                            greeks, regime, confluence, decision, expiry, ta)
 
         result = {
             "index":      index_key,
@@ -112,6 +125,7 @@ def scan_index(obj, df_scrip, index_key, vix_ltp, risk_manager, paper_trader, cu
             "regime":     regime,
             "confluence": confluence,
             "decision":   decision,
+            "ta":         ta,
         }
 
         logger.info(f"✅ {index_key} → {decision.get('action')} ({regime['regime']})")
@@ -122,13 +136,16 @@ def scan_index(obj, df_scrip, index_key, vix_ltp, risk_manager, paper_trader, cu
         send_alert(f"❌ {index_key} Scan Failed", str(e), emoji="❌")
         return {}
 
-def _send_index_summary(index_key, spot_ltp, summary, greeks, regime, confluence, decision, expiry):
+def _send_index_summary(index_key, spot_ltp, summary, greeks, regime, confluence, decision, expiry, ta):
     """Send compact multi-index summary to Telegram."""
     action_emoji = {
         "ENTER": "🟢", "HOLD": "🔵",
         "ADJUST": "🟡", "EXIT": "🔴", "SKIP": "⚪"
     }.get(decision.get("action"), "❓")
 
+    ta_line = f"TA         : {ta.get('overall', 'N/A')} " \
+            f"(🟢{ta.get('bull_count',0)} 🔴{ta.get('bear_count',0)})\n" \
+            f"RSI        : {ta.get('rsi', 'N/A')}"
     msg = (
         f"{regime['emoji']} <b>{index_key}</b> | "
         f"{action_emoji} <b>{decision.get('action')}</b>\n"
@@ -137,6 +154,7 @@ def _send_index_summary(index_key, spot_ltp, summary, greeks, regime, confluence
         f"Expiry     : {expiry} ({greeks['days_to_exp']}d)\n"
         f"Regime     : {regime['regime_label']}\n"
         f"Score      : {confluence['score']}/{confluence['max_score']}\n"
+        f"{ta_line}\n"    
         f"PCR        : {summary['pcr']} | IV: {greeks['avg_iv']}%\n"
         f"Support    : {summary['support']} | Res: {summary['resistance']}\n"
         f"ATM CE/PE  : ₹{summary['atm_ce_ltp']} / ₹{summary['atm_pe_ltp']}\n"

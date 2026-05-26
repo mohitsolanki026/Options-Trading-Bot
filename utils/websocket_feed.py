@@ -90,7 +90,7 @@ class WebSocketFeed:
                 if token:
                     TICK_STORE.update(token, data)
                     ltp = data.get("last_traded_price", 0) / 100
-                    if int(data.get("token", 0)) in [26000, 99926017]:
+                    if int(data.get("token", 0)) in [99926000, 99926017]:
                         logger.info(f"⚡ Tick: token={token} ltp=₹{ltp}")
                     if self.on_tick_callback:
                         self.on_tick_callback(token, data)

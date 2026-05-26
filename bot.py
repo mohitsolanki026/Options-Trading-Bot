@@ -88,7 +88,7 @@ def init_client():
     logger.info(f"✅ Using expiry: {STATE['expiry']}")
     send_alert("Bot Online", f"Logged in ✅\nExpiry: {STATE['expiry']}", emoji="🤖")
     ws = WebSocketFeed(auth_token, feed_token)         # ← correct args
-    ws.subscribe("NSE", ["26000", "99926017"])
+    ws.subscribe("NSE", ["99926000", "99926017"])
     ws.start()
     STATE["ws_feed"] = ws
     logger.info("📡 WebSocket feed started.")

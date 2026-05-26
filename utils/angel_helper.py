@@ -44,7 +44,7 @@ def fetch_ltp(obj, exchange, symbol, token):
     Fetch Last Traded Price.
     exchange: 'NSE' or 'NFO'
     symbol:   e.g. 'NIFTY'
-    token:    instrument token e.g. '26000' for Nifty
+    token:    instrument token e.g. '99926000' for Nifty
     """
     try:
         data = obj.ltpData(exchange, symbol, token)
