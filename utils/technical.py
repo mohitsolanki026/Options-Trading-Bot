@@ -232,7 +232,7 @@ def calculate_vwap(df: pd.DataFrame) -> dict:
 # ─────────────────────────────────────────
 
 def run_technical_analysis(obj, token: str,
-                           interval: str = "FIFTEEN_MINUTE",
+                           interval: str = "FIVE_MINUTE",
                            days_back: int = 5) -> dict:
     """
     Fetch candles and run all indicators.

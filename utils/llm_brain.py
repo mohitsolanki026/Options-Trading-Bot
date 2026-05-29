@@ -231,7 +231,6 @@ Rules:
 - Respond ONLY with the JSON object, no explanation outside it
 """
     
-    logger.info(f"📋 Built LLM prompt with current market data. {prompt}")
     return prompt.strip()
 
 
