@@ -1,7 +1,24 @@
 import os
+import time
 from dotenv import load_dotenv
 
+# Load env-specific file first (APP_ENV=development -> .env.development),
+# then fall back to .env for anything not set.
+_APP_ENV = os.getenv("APP_ENV", "").strip()
+if _APP_ENV:
+    load_dotenv(f".env.{_APP_ENV}", override=False)
 load_dotenv()
+
+# ── Timezone ──────────────────────────────────────────────────────────────
+# The whole bot uses naive datetime.now()/the `schedule` lib, so all market-hours
+# logic assumes the process clock is IST. Force it here so the bot is correct on
+# any host (e.g. GCP defaults to UTC). Override with TZ in the env if needed.
+TIMEZONE = os.getenv("TZ", "Asia/Kolkata")
+os.environ["TZ"] = TIMEZONE
+try:
+    time.tzset()   # POSIX only — applies TZ to datetime.now()/localtime
+except AttributeError:
+    pass
 
 # --- Angel One Credentials ---
 ANGEL_API_KEY    = os.getenv("ANGEL_API_KEY")
@@ -77,10 +94,14 @@ INDICES = {
     },
 }
 
-ACTIVE_INDICES = ["NIFTY", "BANKNIFTY"]
+# Indices to scan/trade (env-driven, comma-separated), validated against INDICES.
+_env_indices = [s.strip().upper() for s in os.getenv("ACTIVE_INDICES", "NIFTY,BANKNIFTY").split(",") if s.strip()]
+ACTIVE_INDICES = [i for i in _env_indices if i in INDICES] or ["NIFTY"]
 
 # Primary index for single-index operations
-ACTIVE_INDEX = "NIFTY"
+ACTIVE_INDEX = os.getenv("ACTIVE_INDEX", "NIFTY").strip().upper()
+if ACTIVE_INDEX not in INDICES:
+    ACTIVE_INDEX = ACTIVE_INDICES[0]
 
 INDIA_VIX_SYMBOL = "India VIX"
 INDIA_VIX_TOKEN  = "99926017"

@@ -1,4 +1,9 @@
 .env
+# Real secret-bearing env files — never commit. .env.development is a committed
+# placeholder template (no real secrets) so it is intentionally NOT ignored.
+.env.local
+.env.testing
+.env.production
 /venv
 __pycache__/
 *.pyc
