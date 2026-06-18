@@ -1,217 +1,168 @@
 import json, os
 import logging
-from datetime import datetime, date
+import threading
+from datetime import datetime
 from utils.trade_journal import (
     log_trade_entry, log_trade_exit, update_daily_summary
 )
+from utils import strategies
 
 logger = logging.getLogger(__name__)
-POSITION_FILE = "data/open_position.json"
+STATE_FILE = "data/paper_state.json"
+
 
 class PaperTrader:
     """
     Simulates real trading without placing actual orders.
-    Tracks full P&L history, win rate, and performance.
+
+    Strategy-agnostic and multi-index: holds at most one open position PER index
+    (keyed in ``self.open_trades``), each position being a list of legs built by
+    ``utils.strategies``. Full state (capital, wins/losses, closed trades and all
+    open positions) is persisted so results survive restarts.
     """
 
     def __init__(self, starting_capital: float = 100000):
         self.starting_capital = starting_capital
         self.capital          = starting_capital
-        self.trades           = []
-        self.open_trade       = None
+        self.trades           = []      # closed trades
+        self.open_trades      = {}      # index -> position dict
         self.trade_count      = 0
         self.wins             = 0
         self.losses           = 0
+        self._lock            = threading.RLock()
         logger.info(f"📄 Paper Trader started with ₹{starting_capital:,}")
 
-
     # ─────────────────────────────────────
-    #  ENTER TRADE
-    # ─────────────────────────────────────
-
-    def enter(
-        self,
-        index:      str,
-        strategy:   str,
-        strike:     float,
-        ce_ltp:     float,
-        pe_ltp:     float,
-        lots:       int,
-        lot_size:   int,
-        expiry:     str,
-        direction:  str = "SELL",
-    ) -> dict:
-        """Open a new paper trade."""
-
-        if self.open_trade:
-            logger.warning("⚠️ Already in a trade — cannot enter new one.")
-            return {}
-
-        combined_premium = round(ce_ltp + pe_ltp, 2)
-        stop_loss        = round(combined_premium * 1.4, 2)
-        target           = round(combined_premium * 0.5, 2)
-        margin_used      = combined_premium * lots * lot_size * 0.2  # approx margin
-
-        trade = {
-            "id":                self.trade_count + 1,
-            "index":             index,
-            "strategy":          strategy,
-            "strike":            strike,
-            "direction":         direction,
-            "ce_entry":          ce_ltp,
-            "pe_entry":          pe_ltp,
-            "combined_premium":  combined_premium,
-            "lots":              lots,
-            "lot_size":          lot_size,
-            "expiry":            expiry,
-            "stop_loss":         stop_loss,
-            "target":            target,
-            "margin_used":       margin_used,
-            "entry_time":        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "status":            "OPEN",
-            "exit_premium":      None,
-            "pnl":               None,
-            "exit_time":         None,
-            "exit_reason":       None,
-        }
-
-        self.open_trade   = trade
-        self.trade_count += 1
-
-        # Log to journal
-        log_trade_entry(
-            index_name  = index,
-            strategy    = strategy,
-            symbol      = f"NIFTY{strike}",
-            direction   = direction,
-            strike      = strike,
-            option_type = "STRADDLE",
-            entry_price = combined_premium,
-            lots        = lots,
-            lot_size    = lot_size,
-            expiry      = expiry,
-            notes       = f"CE={ce_ltp} PE={pe_ltp}",
-        )
-
-        logger.info(
-            f"🟢 Paper ENTER: {strategy} strike={strike} "
-            f"premium=₹{combined_premium} lots={lots}"
-        )
-        self.save_position()
-        return trade
-
-
-    # ─────────────────────────────────────
-    #  EXIT TRADE
+    #  ENTER
     # ─────────────────────────────────────
 
-    def exit(
-        self,
-        ce_ltp:  float,
-        pe_ltp:  float,
-        reason:  str = "Manual exit",
-    ) -> dict:
-        """Close the current open paper trade."""
+    def has_position(self, index: str) -> bool:
+        return index in self.open_trades
 
-        if not self.open_trade:
-            logger.warning("⚠️ No open trade to exit.")
-            return {}
+    def get_position(self, index: str):
+        return self.open_trades.get(index)
 
-        trade           = self.open_trade
-        exit_premium    = round(ce_ltp + pe_ltp, 2)
-        lot_size        = trade["lot_size"]
-        lots            = trade["lots"]
+    def open_count(self) -> int:
+        return len(self.open_trades)
 
-        # P&L for short straddle = sold premium - current premium
-        pnl_per_lot  = (trade["combined_premium"] - exit_premium) * lot_size
-        total_pnl    = round(pnl_per_lot * lots, 2)
-
-        trade["exit_premium"] = exit_premium
-        trade["pnl"]          = total_pnl
-        trade["exit_time"]    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        trade["exit_reason"]  = reason
-        trade["status"]       = "CLOSED"
-
-        # Update capital
-        self.capital += total_pnl
-
-        # Track wins/losses
-        if total_pnl >= 0:
-            self.wins += 1
-        else:
-            self.losses += 1
-
-        self.trades.append(trade)
-        self.open_trade = None
-
-        # Log to journal
-        log_trade_exit(
-            trade_id   = trade["id"],
-            exit_price = exit_premium,
-            pnl        = total_pnl,
-            notes      = reason,
-        )
-        update_daily_summary()
-
-        logger.info(
-            f"🔴 Paper EXIT: premium=₹{exit_premium} "
-            f"P&L=₹{total_pnl} reason={reason}"
-        )
-        self.save_position()
-        return trade
-
-
-    # ─────────────────────────────────────
-    #  STOP LOSS / TARGET CHECK
-    # ─────────────────────────────────────
-
-    def check_levels(self, ce_ltp: float, pe_ltp: float) -> str:
+    def enter(self, position: dict) -> dict:
         """
-        Check if current premiums hit stop loss or target.
-        Returns: 'STOP_LOSS' | 'TARGET' | 'HOLD'
+        Open a pre-built position (from ``strategies.build_position``).
+        Returns the stored position, or {} if one is already open for that index.
         """
-        if not self.open_trade:
+        with self._lock:
+            index = position["index"]
+            if index in self.open_trades:
+                logger.warning(f"⚠️ Already in a trade for {index} — skipping entry.")
+                return {}
+
+            self.trade_count += 1
+            position["id"]         = self.trade_count
+            position["entry_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            legs_note = ", ".join(
+                f"{l['action']} {l['option_type']}{int(l['strike'])}@{l['entry_ltp']}"
+                for l in position["legs"]
+            )
+            journal_id = log_trade_entry(
+                index_name  = index,
+                strategy    = position["strategy"],
+                symbol      = f"{index}{int(position['legs'][0]['strike'])}",
+                direction   = position["direction"],
+                strike      = position["legs"][0]["strike"],
+                option_type = position["strategy"].upper(),
+                entry_price = position["entry_combined"],
+                lots        = position["lots"],
+                lot_size    = position["lot_size"],
+                expiry      = position["expiry"],
+                notes       = legs_note,
+            )
+            position["journal_id"] = journal_id
+
+            self.open_trades[index] = position
+            logger.info(
+                f"🟢 Paper ENTER [{index}]: {position['strategy']} "
+                f"net=₹{position['net_credit']} lots={position['lots']} "
+                f"SL@₹{position['stop_loss_pnl']} TGT@₹{position['target_pnl']}"
+            )
+            self.save_state()
+            return position
+
+    # ─────────────────────────────────────
+    #  EXIT
+    # ─────────────────────────────────────
+
+    def exit(self, index: str, price_map: dict, reason: str = "Manual exit") -> dict:
+        """Close the open position for ``index`` using {token: ltp} prices."""
+        with self._lock:
+            position = self.open_trades.get(index)
+            if not position:
+                logger.warning(f"⚠️ No open trade for {index} to exit.")
+                return {}
+
+            total_pnl = strategies.realise_pnl(position, price_map)
+            position["pnl"]         = total_pnl
+            position["exit_time"]   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            position["exit_reason"] = reason
+            position["status"]      = "CLOSED"
+
+            self.capital += total_pnl
+            if total_pnl >= 0:
+                self.wins += 1
+            else:
+                self.losses += 1
+
+            self.trades.append(position)
+            del self.open_trades[index]
+
+            log_trade_exit(
+                trade_id   = position.get("journal_id", position["id"]),
+                exit_price = position["exit_combined"],
+                pnl        = total_pnl,
+                notes      = reason,
+            )
+            update_daily_summary()
+
+            logger.info(
+                f"🔴 Paper EXIT [{index}]: exit=₹{position['exit_combined']} "
+                f"P&L=₹{total_pnl} reason={reason}"
+            )
+            self.save_state()
+            return position
+
+    # ─────────────────────────────────────
+    #  LEVEL CHECK
+    # ─────────────────────────────────────
+
+    def check_levels(self, index: str, price_map: dict) -> str:
+        """Return 'STOP_LOSS' | 'TARGET' | 'HOLD' for an index's open position."""
+        position = self.open_trades.get(index)
+        if not position:
             return "HOLD"
-
-        current = ce_ltp + pe_ltp
-        sl      = self.open_trade["stop_loss"]
-        target  = self.open_trade["target"]
-
-        if current >= sl:
-            logger.warning(f"🛑 Stop loss hit: ₹{current} >= ₹{sl}")
-            return "STOP_LOSS"
-
-        if current <= target:
-            logger.info(f"🎯 Target hit: ₹{current} <= ₹{target}")
-            return "TARGET"
-
-        return "HOLD"
-
+        return strategies.check_levels(position, price_map)
 
     # ─────────────────────────────────────
-    #  PERFORMANCE STATS
+    #  STATS
     # ─────────────────────────────────────
 
     def get_stats(self) -> dict:
-        """Return full performance statistics."""
-        closed = [t for t in self.trades if t["status"] == "CLOSED"]
-
-        total_pnl    = sum(t["pnl"] for t in closed)
-        win_rate     = (self.wins / len(closed) * 100) if closed else 0
-        avg_win      = (
+        closed = self.trades
+        total_pnl = sum(t["pnl"] for t in closed)
+        win_rate  = (self.wins / len(closed) * 100) if closed else 0
+        avg_win = (
             sum(t["pnl"] for t in closed if t["pnl"] > 0) / self.wins
             if self.wins else 0
         )
-        avg_loss     = (
+        avg_loss = (
             sum(t["pnl"] for t in closed if t["pnl"] < 0) / self.losses
             if self.losses else 0
         )
-        best_trade   = max((t["pnl"] for t in closed), default=0)
-        worst_trade  = min((t["pnl"] for t in closed), default=0)
+        best_trade  = max((t["pnl"] for t in closed), default=0)
+        worst_trade = min((t["pnl"] for t in closed), default=0)
+        gross_win   = sum(t["pnl"] for t in closed if t["pnl"] > 0)
+        gross_loss  = sum(t["pnl"] for t in closed if t["pnl"] < 0)
         profit_factor = (
-            abs(sum(t["pnl"] for t in closed if t["pnl"] > 0)) /
-            abs(sum(t["pnl"] for t in closed if t["pnl"] < 0))
-            if self.losses else float("inf")
+            abs(gross_win) / abs(gross_loss) if gross_loss else float("inf")
         )
 
         return {
@@ -228,15 +179,12 @@ class PaperTrader:
             "best_trade":       best_trade,
             "worst_trade":      worst_trade,
             "profit_factor":    round(profit_factor, 2),
-            "open_trade":       self.open_trade is not None,
+            "open_positions":   self.open_count(),
         }
 
-
     def get_stats_message(self) -> str:
-        """Formatted Telegram message of stats."""
         s = self.get_stats()
         emoji = "🟢" if s["total_pnl"] >= 0 else "🔴"
-
         return (
             f"📄 <b>Paper Trading Stats</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
@@ -251,29 +199,63 @@ class PaperTrader:
             f"Best      : ₹{s['best_trade']}\n"
             f"Worst     : ₹{s['worst_trade']}\n"
             f"Profit Factor: {s['profit_factor']}\n"
+            f"Open Pos  : {s['open_positions']}\n"
             f"━━━━━━━━━━━━━━━━━━"
         )
-    
-    def save_position(self):
-        """Persist open position to disk."""
-        os.makedirs("data", exist_ok=True)
-        if self.open_trade:
-            with open(POSITION_FILE, "w") as f:
-                json.dump(self.open_trade, f, indent=2)
-            logger.info("💾 Open position saved to disk.")
-        else:
-            # Clear file if no open position
-            if os.path.exists(POSITION_FILE):
-                os.remove(POSITION_FILE)
-                logger.info("🗑️ Position file cleared.")
 
-    def load_position(self):
-        """Load open position from disk on startup."""
-        if not os.path.exists(POSITION_FILE):
-            return None
-        with open(POSITION_FILE, "r") as f:
-            trade = json.load(f)
-        self.open_trade  = trade
-        self.trade_count = trade.get("id", 1)
-        logger.warning(f"⚠️ Loaded open position from disk: {trade['strategy']} @ ₹{trade['combined_premium']}")
-        return trade
+    # ─────────────────────────────────────
+    #  PERSISTENCE (full state)
+    # ─────────────────────────────────────
+
+    def save_state(self):
+        """Persist full trader state to disk."""
+        with self._lock:
+            os.makedirs("data", exist_ok=True)
+            state = {
+                "starting_capital": self.starting_capital,
+                "capital":          self.capital,
+                "trade_count":      self.trade_count,
+                "wins":             self.wins,
+                "losses":           self.losses,
+                "trades":           self.trades,
+                "open_trades":      self.open_trades,
+            }
+            tmp = STATE_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(state, f, indent=2, default=str)
+            os.replace(tmp, STATE_FILE)   # atomic write
+            logger.debug("💾 Paper state saved.")
+
+    def load_state(self) -> dict:
+        """
+        Restore full state from disk on startup.
+        Returns the dict of open positions (index -> position).
+        """
+        if not os.path.exists(STATE_FILE):
+            logger.info("✅ No saved paper state — starting fresh.")
+            return {}
+        try:
+            with open(STATE_FILE, "r") as f:
+                state = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.error(f"❌ Could not load paper state: {e} — starting fresh.")
+            return {}
+
+        self.starting_capital = state.get("starting_capital", self.starting_capital)
+        self.capital          = state.get("capital", self.starting_capital)
+        self.trade_count      = state.get("trade_count", 0)
+        self.wins             = state.get("wins", 0)
+        self.losses           = state.get("losses", 0)
+        self.trades           = state.get("trades", [])
+        self.open_trades      = state.get("open_trades", {})
+
+        if self.open_trades:
+            logger.warning(
+                f"⚠️ Restored {len(self.open_trades)} open position(s): "
+                f"{list(self.open_trades.keys())}"
+            )
+        logger.info(
+            f"✅ Paper state restored: capital=₹{self.capital:,.0f} "
+            f"trades={len(self.trades)} W/L={self.wins}/{self.losses}"
+        )
+        return self.open_trades

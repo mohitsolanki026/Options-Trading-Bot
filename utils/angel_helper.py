@@ -32,11 +32,11 @@ def get_angel_client():
             return obj, auth_token, feed_token 
         else:
             logger.error(f"❌ Login failed: {data}")
-            return None
+            return None, None, None
 
     except Exception as e:
         logger.error(f"❌ Exception during login: {e}")
-        return None
+        return None, None, None
 
 
 def fetch_ltp(obj, exchange, symbol, token):
@@ -56,6 +56,51 @@ def fetch_ltp(obj, exchange, symbol, token):
     except Exception as e:
         logger.error(f"❌ LTP error: {e}")
         return None
+
+
+def fetch_required_margin(obj, legs, lot_size: int = None, exchange: str = "NFO"):
+    """
+    Fetch the REAL margin Angel would block for a set of option legs, using the
+    broker's margin calculator (``getMarginApi``). Read-only — places no order.
+
+    legs     : list of {token, action ("BUY"|"SELL"), lots, entry_ltp}.
+               Per-leg "lot_size" is used if present, else the ``lot_size`` arg.
+    lot_size : index lot size, applied when legs don't carry their own.
+    Returns total margin (float ₹) or None if the call fails (caller falls back).
+    """
+    if not obj or not legs:
+        return None
+
+    positions = []
+    for leg in legs:
+        leg_lot_size = leg.get("lot_size", lot_size)
+        if not leg_lot_size:
+            logger.error("❌ Margin calc: missing lot_size for leg.")
+            return None
+        qty = int(leg["lots"]) * int(leg_lot_size)
+        positions.append({
+            "exchange":    exchange,
+            "qty":         qty,
+            "price":       float(leg.get("entry_ltp", 0) or 0),
+            "productType": "CARRY",   # positional index options
+            "token":       str(leg["token"]),
+            "tradeType":   "SELL" if leg["action"] == "SELL" else "BUY",
+            "orderType":   "MARKET",
+        })
+
+    try:
+        resp = obj.getMarginApi({"positions": positions})
+        if resp and resp.get("status"):
+            data = resp.get("data", {}) or {}
+            margin = (data.get("totalMarginRequired")
+                      or data.get("totalMargin")
+                      or data.get("marginRequired"))
+            if margin is not None:
+                return float(margin)
+        logger.warning(f"⚠️ Margin API returned no usable margin: {resp}")
+    except Exception as e:
+        logger.error(f"❌ Margin API error: {e}")
+    return None
 
 
 def fetch_market_data(obj, exchange, symbol, token):

@@ -86,13 +86,16 @@ def get_available_expiries_for_index(df, index_name: str):
     expiries = sorted(expiries, key=parse)
     return expiries
 
-def fetch_oi_data(obj, options_df, nifty_spot: float, num_strikes: int = 10):
+def fetch_oi_data(obj, options_df, nifty_spot: float, num_strikes: int = 10,
+                  strike_gap: int = 50):
     """
     Fetch OI for strikes around current spot price.
     Uses batch API call — much faster and correct signature.
+
+    strike_gap : ATM rounding step for this index (NIFTY=50, BANKNIFTY=100).
     """
-    # Round spot to nearest 50
-    atm_strike = round(nifty_spot / 50) * 50
+    # Round spot to nearest strike gap for this index
+    atm_strike = round(nifty_spot / strike_gap) * strike_gap
 
     # Get strikes around ATM
     all_strikes = sorted(options_df["strike"].unique())
@@ -212,12 +215,13 @@ def find_support_resistance(df_oi: pd.DataFrame):
     return support, resistance
 
 
-def summarise_options_chain(df_oi: pd.DataFrame, nifty_spot: float):
+def summarise_options_chain(df_oi: pd.DataFrame, nifty_spot: float,
+                            strike_gap: int = 50):
     """Return a clean summary dict of all key options metrics."""
     pcr              = calculate_pcr(df_oi)
     max_pain         = find_max_pain(df_oi)
     support, resistance = find_support_resistance(df_oi)
-    atm_strike       = round(nifty_spot / 50) * 50
+    atm_strike       = round(nifty_spot / strike_gap) * strike_gap
 
     # ATM IV proxy (LTP based — real IV needs Black-Scholes, Week 2)
     atm_ce = df_oi[df_oi["strike"] == atm_strike]["CE_LTP"].values

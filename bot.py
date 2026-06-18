@@ -22,7 +22,6 @@ from utils.trade_journal import (
 from utils.paper_trader import PaperTrader
 from utils.websocket_feed import WebSocketFeed
 from utils.tick_monitor import TickMonitor
-from utils.index_scanner import scan_index
 
 idx = INDICES[ACTIVE_INDEX] 
 
@@ -37,41 +36,38 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Shared state ---
+# Open positions live in STATE["paper_trader"].open_trades (keyed by index) —
+# that is the single source of truth. STATE["index_data"] holds the latest
+# per-index analysis snapshot (incl. df_oi) for the tick monitor.
 STATE = {
-    "obj":              None,
-    "df_scrip":         None,
-    "expiry":           None,
-    "options_df":       None,
-    "nifty_ltp":        None,
-    "vix_ltp":          None,
-    "summary":          None,
-    "greeks":           None,
-    "regime":           None,
-    "confluence":       None,
-    "decision":         None,
-    "risk_manager":     None,
-    "paper_trader":     PaperTrader(starting_capital=100000),  # ← add this
- # Per-index state — keyed by index name
-    "index_data":        {},   # {"NIFTY": {...}, "BANKNIFTY": {...}}
-    "current_positions": {},   # {"NIFTY": pos or None, "BANKNIFTY": None}
-    "current_position":  None,
-    "nifty_ltp":         None,
-    "capital":          100000,
-    "auth_token":  None,   # ← add
-    "feed_token":  None,   # ← add
-    "ws_feed":     None,   # ← add
-    "ce_token":    None,   # ← add (ATM CE instrument token)
-    "pe_token":    None,   # ← add (ATM PE instrument token)
+    "obj":           None,
+    "df_scrip":      None,
+    "expiry":        None,
+    "options_df":    None,
+    "nifty_ltp":     None,
+    "vix_ltp":       None,
+    "summary":       None,
+    "greeks":        None,
+    "regime":        None,
+    "confluence":    None,
+    "decision":      None,
+    "risk_manager":  None,
+    "paper_trader":  PaperTrader(starting_capital=100000),
+    "index_data":    {},     # {"NIFTY": {analysis result}, ...}
+    "auth_token":    None,
+    "feed_token":    None,
+    "ws_feed":       None,
 }
 
 def init_client():
-    """Login to Angel One and load scrip master."""
+    """Login to Angel One and load scrip master. Safe to re-run daily."""
     logger.info("🔐 Logging into Angel One...")
-    obj, auth_token, feed_token = get_angel_client()   # ← three values now
+    obj, auth_token, feed_token = get_angel_client()   # (None, None, None) on failure
     if not obj:
         send_error("Login FAILED!")
         raise Exception("Login failed")
     STATE["obj"]        = obj
+    STATE["auth_token"] = auth_token
     STATE["feed_token"] = feed_token
 
     logger.info("📥 Loading scrip master...")
@@ -88,29 +84,38 @@ def init_client():
 
     logger.info(f"✅ Using expiry: {STATE['expiry']}")
     send_alert("Bot Online", f"Logged in ✅\nExpiry: {STATE['expiry']}", emoji="🤖")
-    ws = WebSocketFeed(auth_token, feed_token)         # ← correct args
-    ws.subscribe("NSE", ["99926000", "99926017"])
+
+    # ── WebSocket feed — reuse if already running (avoid daily socket leak) ──
+    old_ws = STATE.get("ws_feed")
+    if old_ws is not None:
+        try:
+            old_ws.stop()
+            logger.info("🛑 Stopped previous WebSocket before reconnect.")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not stop old WebSocket: {e}")
+
+    ws = WebSocketFeed(auth_token, feed_token)
+    ws.subscribe("NSE", [INDICES[ACTIVE_INDEX]["token"], INDIA_VIX_TOKEN])
     ws.start()
     STATE["ws_feed"] = ws
     logger.info("📡 WebSocket feed started.")
 
-    # ── ADD THIS BLOCK AT THE BOTTOM ──────────────
-    pt             = STATE["paper_trader"]
-    saved_position = pt.load_position()
+    # ── Restore any open paper positions and re-subscribe their leg tokens ──
+    from utils import strategies
+    pt          = STATE["paper_trader"]
+    open_trades = pt.load_state()
 
-    if saved_position:
-        STATE["current_position"] = saved_position
-        send_alert(
-            "⚠️ Open Position Found",
-            f"Reloaded from previous session:\n"
-            f"Strategy : {saved_position['strategy']}\n"
-            f"Entry    : ₹{saved_position['combined_premium']}\n"
-            f"Stop Loss: ₹{saved_position['stop_loss']}\n"
-            f"Target   : ₹{saved_position['target']}\n"
-            f"Expiry   : {saved_position['expiry']}\n"
-            f"⚠️ Monitor will check this position immediately.",
-            emoji="⚠️"
-        )
+    if open_trades:
+        for index_key, pos in open_trades.items():
+            ws.subscribe("NFO", strategies.all_tokens(pos))
+            send_alert(
+                f"⚠️ Open Position Restored [{index_key}]",
+                f"Strategy : {pos['strategy']}\n"
+                f"Net Prem : ₹{pos['net_credit']} ({pos['direction']})\n"
+                f"Expiry   : {pos['expiry']}\n"
+                f"Monitor will manage it immediately.",
+                emoji="⚠️"
+            )
     else:
         logger.info("✅ No open position from previous session.")
 
@@ -156,21 +161,25 @@ def market_open_scan():
         from utils.risk_manager import RiskManager
         STATE["risk_manager"] = RiskManager()
 
-    from utils.index_scanner import scan_index
+    from utils.index_scanner import scan_and_broadcast
+
+    pt          = STATE["paper_trader"]
+    risk_status = STATE["risk_manager"].get_status()
 
     results = {}
     for index_key in ACTIVE_INDICES:
-        time.sleep(10)        
+        time.sleep(10)
         try:
-            result = scan_index(
-                obj               = obj,
-                df_scrip          = STATE["df_scrip"],
-                index_key         = index_key,
-                vix_ltp           = vix_ltp,
-                risk_manager      = STATE["risk_manager"],
-                paper_trader      = STATE["paper_trader"],
-                current_positions = STATE["current_positions"],
+            result = scan_and_broadcast(
+                obj         = obj,
+                df_scrip    = STATE["df_scrip"],
+                index_key   = index_key,
+                vix_ltp     = vix_ltp,
+                risk_status = risk_status,
+                position    = pt.get_position(index_key),
             )
+            if not result:
+                continue
             results[index_key] = result
 
             # Update STATE for primary index (backward compat)
@@ -184,9 +193,6 @@ def market_open_scan():
                 STATE["options_df"] = result.get("options_df")
                 STATE["expiry"]     = result.get("expiry")
 
-                # Subscribe ATM tokens to WebSocket
-                _subscribe_atm_tokens(result)
-
         except Exception as e:
             logger.error(f"❌ Error scanning {index_key}: {e}")
 
@@ -195,35 +201,6 @@ def market_open_scan():
     # Best opportunity summary
     _send_best_opportunity(results)
     logger.info("✅ All indices scanned.")
-
-def _subscribe_atm_tokens(result: dict):
-    """Subscribe ATM CE + PE tokens to WebSocket."""
-    ws = STATE.get("ws_feed")
-    if not ws:
-        return
-
-    options_df = result.get("options_df")
-    summary    = result.get("summary")
-    if options_df is None or summary is None:
-        return
-
-    atm_strike = summary["atm_strike"]
-    atm_ce = options_df[
-        (options_df["strike"] == atm_strike) &
-        (options_df["symbol"].str.endswith("CE"))
-    ]
-    atm_pe = options_df[
-        (options_df["strike"] == atm_strike) &
-        (options_df["symbol"].str.endswith("PE"))
-    ]
-
-    if not atm_ce.empty and not atm_pe.empty:
-        ce_token = str(atm_ce.iloc[0]["token"])
-        pe_token = str(atm_pe.iloc[0]["token"])
-        STATE["ce_token"] = ce_token
-        STATE["pe_token"] = pe_token
-        ws.subscribe("NFO", [ce_token, pe_token])
-        logger.info(f"📡 ATM subscribed: CE={ce_token} PE={pe_token}")
 
 def _send_best_opportunity(results: dict):
     """Highlight the best trade opportunity across all indices."""
@@ -315,6 +292,10 @@ if __name__ == "__main__":
     # 2. Run pre-market scan immediately on startup (for testing)
     pre_market_scan()
     market_open_scan()
+
+    # 2b. Force-exit any restored position that has already expired
+    from utils.monitor import force_exit_all_on_startup
+    force_exit_all_on_startup(STATE)
 
     # 3. Schedule daily jobs
     jobs = {

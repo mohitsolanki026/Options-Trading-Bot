@@ -16,7 +16,14 @@ from utils.technical import run_technical_analysis
 
 logger = logging.getLogger(__name__)
 
-def scan_index(obj, df_scrip, index_key, vix_ltp, risk_manager, paper_trader, current_positions):
+def analyze_index(obj, df_scrip, index_key, vix_ltp, risk_status, position=None):
+    """
+    Run the full analysis pipeline for one index and return the result.
+
+    PURE w.r.t. Telegram — sends NO messages (except a failure alert), so it is
+    safe to call every monitor cycle. Use ``scan_and_broadcast`` for the daily
+    scan that should also push a summary to Telegram.
+    """
     idx = INDICES[index_key]
     logger.info(f"\n{'='*40}")
     logger.info(f"📊 Scanning {index_key}...")
@@ -53,8 +60,10 @@ def scan_index(obj, df_scrip, index_key, vix_ltp, risk_manager, paper_trader, cu
             logger.warning(f"⚠️ No options data for {index_key}")
             return {}
 
-        df_oi   = fetch_oi_data(obj, options_df, spot_ltp, num_strikes=10)
-        summary = summarise_options_chain(df_oi, spot_ltp)
+        strike_gap = idx.get("strike_gap", 50)
+        df_oi   = fetch_oi_data(obj, options_df, spot_ltp, num_strikes=10,
+                                strike_gap=strike_gap)
+        summary = summarise_options_chain(df_oi, spot_ltp, strike_gap=strike_gap)
 
         # ── 4. Greeks ─────────────────────
         greeks  = analyse_atm_greeks(summary, expiry)
@@ -87,8 +96,6 @@ def scan_index(obj, df_scrip, index_key, vix_ltp, risk_manager, paper_trader, cu
         )
 
         # ── 7. LLM decision ───────────────
-        risk_status = risk_manager.get_status()
-        position    = current_positions.get(index_key)
         decision    = get_trade_decision(
             summary     = summary,
             greeks      = greeks,
@@ -111,14 +118,11 @@ def scan_index(obj, df_scrip, index_key, vix_ltp, risk_manager, paper_trader, cu
             vix        = vix_ltp,
         )
 
-        # ── 9. Telegram ───────────────────
-        _send_index_summary(index_key, spot_ltp, summary,
-                            greeks, regime, confluence, decision, expiry, ta)
-
         result = {
             "index":      index_key,
             "expiry":     expiry,
             "options_df": options_df,
+            "df_oi":      df_oi,
             "spot_ltp":   spot_ltp,
             "summary":    summary,
             "greeks":     greeks,
@@ -135,6 +139,18 @@ def scan_index(obj, df_scrip, index_key, vix_ltp, risk_manager, paper_trader, cu
         logger.error(f"❌ {index_key} scan failed at: {e}", exc_info=True)
         send_alert(f"❌ {index_key} Scan Failed", str(e), emoji="❌")
         return {}
+
+
+def scan_and_broadcast(obj, df_scrip, index_key, vix_ltp, risk_status, position=None):
+    """Analyse an index AND push a summary card to Telegram (daily 9:30 scan)."""
+    result = analyze_index(obj, df_scrip, index_key, vix_ltp, risk_status, position)
+    if result:
+        _send_index_summary(
+            index_key, result["spot_ltp"], result["summary"], result["greeks"],
+            result["regime"], result["confluence"], result["decision"],
+            result["expiry"], result["ta"],
+        )
+    return result
 
 def _send_index_summary(index_key, spot_ltp, summary, greeks, regime, confluence, decision, expiry, ta):
     """Send compact multi-index summary to Telegram."""

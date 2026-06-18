@@ -178,7 +178,8 @@ class RiskManager:
 
     # ── TRADE GATE (main approval function) ──
 
-    def approve_trade(self, capital: float, option_price: float) -> dict:
+    def approve_trade(self, capital: float, option_price: float,
+                      lot_size: int = None) -> dict:
         """
         Master approval function.
         Call this before placing ANY trade.
@@ -201,7 +202,9 @@ class RiskManager:
                 }
 
         # All checks passed — calculate size
-        sizing = self.calculate_position_size(capital, option_price, INDICES[ACTIVE_INDEX]["lot_size"])
+        if lot_size is None:
+            lot_size = INDICES[ACTIVE_INDEX]["lot_size"]
+        sizing = self.calculate_position_size(capital, option_price, lot_size)
 
         return {
             "approved":  True,
@@ -210,6 +213,47 @@ class RiskManager:
             "exposure":  sizing["total_exposure"],
             "sizing":    sizing,
         }
+
+
+    def cap_lots_by_margin(self, obj, index, strategy, summary, df_oi, options_df,
+                           lot_size, expiry, capital, max_lots) -> int:
+        """
+        Cap lot count so the REAL Angel margin for the chosen legs stays within
+        the per-trade capital allocation. One margin API call; scales down
+        proportionally if needed. Falls back to ``max_lots`` if the API is
+        unavailable (paper/offline) so premium-based sizing still applies.
+        """
+        from utils import strategies
+        from utils.angel_helper import fetch_required_margin
+
+        allocation = capital * self.max_capital_per_trade
+
+        position = strategies.build_position(
+            index, strategy, summary, df_oi, options_df,
+            max_lots, lot_size, expiry,
+        )
+        if not position:
+            return 0
+
+        margin = fetch_required_margin(obj, position["legs"], lot_size=lot_size)
+        if margin is None or margin <= 0:
+            logger.warning("⚠️ Real margin unavailable — using premium-based sizing.")
+            return max_lots
+
+        if margin <= allocation:
+            logger.info(
+                f"📐 {index} {strategy}: {max_lots} lot(s), margin ₹{margin:,.0f} "
+                f"≤ alloc ₹{allocation:,.0f}"
+            )
+            return max_lots
+
+        per_lot = margin / max_lots
+        lots = int(allocation / per_lot)
+        logger.info(
+            f"📐 {index} {strategy}: margin ₹{margin:,.0f} > alloc ₹{allocation:,.0f} "
+            f"→ trimmed {max_lots}→{lots} lot(s)"
+        )
+        return max(0, min(max_lots, lots))
 
 
     # ── POSITION MANAGEMENT ───────────────
@@ -228,32 +272,30 @@ class RiskManager:
         logger.info(f"➕ Position added: {symbol} {direction} {lots} lot(s) @ ₹{entry_price}")
         return position
 
-    def close_position(self, symbol: str, exit_price: float) -> float:
-        """Close a position and record P&L."""
+    def close_position(self, symbol: str, realized_pnl: float) -> float:
+        """
+        Record the close of a position. The realized P&L is computed by the
+        execution layer (strategies/paper_trader) since it is strategy-aware
+        (multi-leg); the risk manager only tracks the daily total and halts.
+        """
         for pos in self.open_positions:
             if pos["symbol"] == symbol:
-                lot_size =  INDICES[ACTIVE_INDEX]["lot_size"]
-                if pos["direction"] == "SELL":
-                    pnl = (pos["entry_price"] - exit_price) * pos["lots"] * lot_size
-                else:
-                    pnl = (exit_price - pos["entry_price"]) * pos["lots"] * lot_size
-
                 self.open_positions.remove(pos)
-                self.daily_pnl.add_trade(pnl, symbol, "CLOSE")
+                break
+        else:
+            logger.warning(f"⚠️ Position not found in risk manager: {symbol}")
 
-                logger.info(f"➖ Position closed: {symbol} P&L=₹{round(pnl, 2)}")
+        self.daily_pnl.add_trade(realized_pnl, symbol, "CLOSE")
+        logger.info(f"➖ Position closed: {symbol} P&L=₹{round(realized_pnl, 2)}")
 
-                # Auto-halt if daily limit breached
-                ok, reason = self.check_daily_loss_limit()
-                if not ok:
-                    self.trading_halted = True
-                    self.halt_reason    = reason
-                    logger.warning(f"🛑 TRADING HALTED: {reason}")
+        # Auto-halt if daily limit breached
+        ok, reason = self.check_daily_loss_limit()
+        if not ok:
+            self.trading_halted = True
+            self.halt_reason    = reason
+            logger.warning(f"🛑 TRADING HALTED: {reason}")
 
-                return round(pnl, 2)
-
-        logger.warning(f"⚠️ Position not found: {symbol}")
-        return 0.0
+        return round(realized_pnl, 2)
 
     def check_stop_losses(self, current_prices: dict) -> list:
         """

@@ -2,6 +2,40 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Minimum confluence score required to enter (must match run_confluence threshold)
+ENTRY_THRESHOLD = 4
+
+
+def entry_allowed(
+    confluence: dict,
+    risk_status: dict,
+    open_count: int,
+    max_positions: int,
+    in_entry_window: bool,
+) -> tuple[bool, str]:
+    """
+    CODE-LEVEL entry gate — the authoritative GO/NO-GO for any new trade.
+
+    This is enforced in code regardless of what the LLM recommends; the LLM is
+    advisory and may only refine *which* strategy/strikes within what this gate
+    already permits. Returns (allowed, reason).
+    """
+    score     = confluence.get("score", 0)
+    threshold = confluence.get("threshold", ENTRY_THRESHOLD)
+    max_score = confluence.get("max_score", "?")
+
+    if score < threshold:
+        return False, f"Score {score}/{max_score} < {threshold}"
+    if risk_status.get("trading_halted"):
+        return False, f"Trading halted: {risk_status.get('halt_reason')}"
+    if risk_status.get("headroom", 1) <= 0:
+        return False, "Daily loss limit reached"
+    if open_count >= max_positions:
+        return False, f"Max positions reached: {open_count}/{max_positions}"
+    if not in_entry_window:
+        return False, "Outside safe entry window"
+    return True, "OK"
+
 
 # ─────────────────────────────────────────
 #  SIGNAL DEFINITIONS
