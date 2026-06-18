@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, date
 from config.settings import RISK_RULES
-from config.settings import INDICES, ACTIVE_INDEX
+from config.settings import INDICES, ACTIVE_INDICES
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +203,7 @@ class RiskManager:
 
         # All checks passed — calculate size
         if lot_size is None:
-            lot_size = INDICES[ACTIVE_INDEX]["lot_size"]
+            lot_size = INDICES[ACTIVE_INDICES[0]]["lot_size"]
         sizing = self.calculate_position_size(capital, option_price, lot_size)
 
         return {

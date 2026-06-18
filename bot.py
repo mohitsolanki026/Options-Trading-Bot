@@ -13,7 +13,7 @@ from utils.telegram_helper import (
     send_alert, send_error
 )
 from utils.scheduler import start_scheduler
-from config.settings import INDICES, ACTIVE_INDEX, ACTIVE_INDICES, INDIA_VIX_SYMBOL, INDIA_VIX_TOKEN
+from config.settings import INDICES, ACTIVE_INDICES, INDIA_VIX_SYMBOL, INDIA_VIX_TOKEN
 # Add at top of bot.py after imports
 from utils.trade_journal import (
     init_db, log_signal, update_daily_summary,
@@ -22,8 +22,6 @@ from utils.trade_journal import (
 from utils.paper_trader import PaperTrader
 from utils.websocket_feed import WebSocketFeed
 from utils.tick_monitor import TickMonitor
-
-idx = INDICES[ACTIVE_INDEX] 
 
 logging.basicConfig(
     level=logging.INFO,
@@ -95,7 +93,8 @@ def init_client():
             logger.warning(f"⚠️ Could not stop old WebSocket: {e}")
 
     ws = WebSocketFeed(auth_token, feed_token)
-    ws.subscribe("NSE", [INDICES[ACTIVE_INDEX]["token"], INDIA_VIX_TOKEN])
+    spot_tokens = [INDICES[i]["token"] for i in ACTIVE_INDICES] + [INDIA_VIX_TOKEN]
+    ws.subscribe("NSE", spot_tokens)
     ws.start()
     STATE["ws_feed"] = ws
     logger.info("📡 WebSocket feed started.")
@@ -182,17 +181,6 @@ def market_open_scan():
                 continue
             results[index_key] = result
 
-            # Update STATE for primary index (backward compat)
-            if index_key == ACTIVE_INDEX:
-                STATE["summary"]    = result.get("summary")
-                STATE["greeks"]     = result.get("greeks")
-                STATE["regime"]     = result.get("regime")
-                STATE["confluence"] = result.get("confluence")
-                STATE["decision"]   = result.get("decision")
-                STATE["nifty_ltp"]  = result.get("spot_ltp")
-                STATE["options_df"] = result.get("options_df")
-                STATE["expiry"]     = result.get("expiry")
-
         except Exception as e:
             logger.error(f"❌ Error scanning {index_key}: {e}")
 
@@ -217,9 +205,10 @@ def _send_best_opportunity(results: dict):
 
     if best and best_score >= 4:
         key, result = best
+        max_score = result.get("confluence", {}).get("max_score", 7)
         send_alert(
             f"🏆 Best Opportunity: {key}",
-            f"Score    : {best_score}/6\n"
+            f"Score    : {best_score}/{max_score}\n"
             f"Regime   : {result['regime']['regime_label']}\n"
             f"Strategy : {result['decision'].get('strategy')}\n"
             f"Action   : {result['decision'].get('action')}",
@@ -233,17 +222,26 @@ def _send_best_opportunity(results: dict):
 def midday_check():
     """
     Runs at 12:00 PM.
-    Quick pulse check — just LTP + VIX.
+    Quick pulse check — LTP for every active index + VIX.
     """
     logger.info("☀️ Mid-day check...")
     obj = STATE["obj"]
 
-    # nifty_ltp = fetch_ltp(obj, "NSE", "Nifty 50", "26000")
-    nifty_ltp = fetch_ltp(obj, "NSE", idx["symbol"], idx["token"])
-    vix_ltp   = fetch_ltp(obj, "NSE", "India VIX", "99926017")
+    vix_ltp = fetch_ltp(obj, "NSE", INDIA_VIX_SYMBOL, INDIA_VIX_TOKEN)
+    STATE["vix_ltp"] = vix_ltp
 
-    send_market_update(nifty_ltp, vix_ltp)
-    logger.info(f"✅ Mid-day: Nifty={nifty_ltp}, VIX={vix_ltp}")
+    lines = [f"☀️ <b>Mid-Day Pulse</b>\n━━━━━━━━━━━━━━━━━━"]
+    ltps = {}
+    for index_key in ACTIVE_INDICES:
+        idx = INDICES[index_key]
+        ltp = fetch_ltp(obj, "NSE", idx["symbol"], idx["token"])
+        ltps[index_key] = ltp
+        lines.append(f"<b>{index_key}</b> : ₹{ltp}")
+    lines.append(f"VIX      : {vix_ltp}")
+
+    from utils.telegram_helper import send_message
+    send_message("\n".join(lines))
+    logger.info(f"✅ Mid-day: {ltps}, VIX={vix_ltp}")
 
 
 # ─────────────────────────────────────────
@@ -253,24 +251,29 @@ def end_of_day_report():
     """Runs at 3:30 PM. Sends final summary for the day."""  # ← docstring first
 
     logger.info("🌆 End of day report...")
-    
-    update_daily_summary()   # ← then logic
-    
-    summary = STATE.get("summary", {})
-    now     = datetime.now().strftime("%d %b %Y")
 
-    msg = (
-        f"📅 <b>End of Day — {now}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"Nifty Close  : ₹{STATE.get('nifty_ltp', 'N/A')}\n"
-        f"VIX          : {STATE.get('vix_ltp', 'N/A')}\n"
-        f"PCR          : {summary.get('pcr', 'N/A')}\n"
-        f"Max Pain     : {summary.get('max_pain', 'N/A')}\n"
-        f"Support      : {summary.get('support', 'N/A')}\n"
-        f"Resistance   : {summary.get('resistance', 'N/A')}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"✅ Bot shutting down for today."
-    )
+    update_daily_summary()   # ← then logic
+
+    now        = datetime.now().strftime("%d %b %Y")
+    index_data = STATE.get("index_data", {})
+
+    lines = [
+        f"📅 <b>End of Day — {now}</b>",
+        f"━━━━━━━━━━━━━━━━━━",
+        f"VIX          : {STATE.get('vix_ltp', 'N/A')}",
+    ]
+    for index_key in ACTIVE_INDICES:
+        result  = index_data.get(index_key) or {}
+        summary = result.get("summary", {})
+        lines.append(f"\n<b>{index_key}</b>  Close ₹{result.get('spot_ltp', 'N/A')}")
+        lines.append(f"  PCR {summary.get('pcr', 'N/A')} | "
+                     f"MaxPain {summary.get('max_pain', 'N/A')}")
+        lines.append(f"  Sup {summary.get('support', 'N/A')} | "
+                     f"Res {summary.get('resistance', 'N/A')}")
+    lines.append(f"━━━━━━━━━━━━━━━━━━")
+    lines.append(f"✅ Bot shutting down for today.")
+    msg = "\n".join(lines)
+
     from utils.telegram_helper import send_message
     weekly = get_weekly_summary()
     msg += f"\n\n📅 <b>Last 7 Days:</b>\n<pre>{weekly}</pre>"

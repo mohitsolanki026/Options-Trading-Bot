@@ -95,13 +95,10 @@ INDICES = {
 }
 
 # Indices to scan/trade (env-driven, comma-separated), validated against INDICES.
+# The bot is fully multi-index: every index here is scanned and can hold its own
+# position concurrently. There is no single "primary" index.
 _env_indices = [s.strip().upper() for s in os.getenv("ACTIVE_INDICES", "NIFTY,BANKNIFTY").split(",") if s.strip()]
 ACTIVE_INDICES = [i for i in _env_indices if i in INDICES] or ["NIFTY"]
-
-# Primary index for single-index operations
-ACTIVE_INDEX = os.getenv("ACTIVE_INDEX", "NIFTY").strip().upper()
-if ACTIVE_INDEX not in INDICES:
-    ACTIVE_INDEX = ACTIVE_INDICES[0]
 
 INDIA_VIX_SYMBOL = "India VIX"
 INDIA_VIX_TOKEN  = "99926017"

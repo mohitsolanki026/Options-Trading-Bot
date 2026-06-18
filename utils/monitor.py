@@ -8,7 +8,7 @@ from utils import strategies
 from utils.telegram_helper import send_message, send_alert
 from utils.websocket_feed import TICK_STORE
 from config.settings import (
-    INDICES, ACTIVE_INDEX, ACTIVE_INDICES,
+    INDICES, ACTIVE_INDICES,
     INDIA_VIX_SYMBOL, INDIA_VIX_TOKEN,
 )
 
@@ -119,18 +119,6 @@ def run_monitor_cycle(STATE: dict):
                 continue
 
             STATE["index_data"][index_key] = result   # snapshot for tick monitor
-
-            # Backward-compat: mirror primary index into top-level STATE
-            if index_key == ACTIVE_INDEX:
-                STATE["summary"]    = result["summary"]
-                STATE["greeks"]     = result["greeks"]
-                STATE["regime"]     = result["regime"]
-                STATE["confluence"] = result["confluence"]
-                STATE["decision"]   = result["decision"]
-                STATE["nifty_ltp"]  = result["spot_ltp"]
-                STATE["options_df"] = result["options_df"]
-                STATE["expiry"]     = result["expiry"]
-
             manage_index(STATE, index_key, result)
 
         except Exception as e:
