@@ -45,4 +45,30 @@ def test_returns_none_on_exception():
     class Boom:
         def getMarginApi(self, params):
             raise RuntimeError("network down")
-    assert fetch_required_margin(Boom(), LEGS) is None
+    assert fetch_required_margin(Boom(), LEGS, retries=1) is None
+
+
+def test_retries_then_succeeds_on_transient_empty_body(monkeypatch):
+    """First call throws (empty body / throttle), second returns a real margin."""
+    import utils.angel_helper as ah
+    monkeypatch.setattr(ah.time, "sleep", lambda *_: None)   # no real backoff in test
+
+    class Flaky:
+        def __init__(self):
+            self.calls = 0
+        def getMarginApi(self, params):
+            self.calls += 1
+            if self.calls == 1:
+                raise ValueError("Couldn't parse the JSON response: b''")
+            return {"status": True, "data": {"totalMarginRequired": 145000.0}}
+    obj = Flaky()
+    assert fetch_required_margin(obj, LEGS, retries=2) == 145000.0
+    assert obj.calls == 2
+
+
+def test_payload_has_no_orderType_and_is_intraday():
+    obj = FakeObj({"status": True, "data": {"totalMarginRequired": 1.0}})
+    fetch_required_margin(obj, LEGS)
+    pos = obj.last_params["positions"][0]
+    assert "orderType" not in pos              # extra keys make the gateway 500/empty
+    assert pos["productType"] == "INTRADAY"
