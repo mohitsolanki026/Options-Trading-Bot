@@ -13,7 +13,7 @@ from utils.telegram_helper import (
     send_alert, send_error
 )
 from utils.scheduler import start_scheduler
-from config.settings import INDICES, ACTIVE_INDICES, INDIA_VIX_SYMBOL, INDIA_VIX_TOKEN
+from config.settings import INDICES, ACTIVE_INDICES, INDIA_VIX_SYMBOL, INDIA_VIX_TOKEN, PAPER_CAPITAL
 # Add at top of bot.py after imports
 from utils.trade_journal import (
     init_db, log_signal, update_daily_summary,
@@ -50,7 +50,7 @@ STATE = {
     "confluence":    None,
     "decision":      None,
     "risk_manager":  None,
-    "paper_trader":  PaperTrader(starting_capital=100000),
+    "paper_trader":  PaperTrader(starting_capital=PAPER_CAPITAL),
     "index_data":    {},     # {"NIFTY": {analysis result}, ...}
     "auth_token":    None,
     "feed_token":    None,

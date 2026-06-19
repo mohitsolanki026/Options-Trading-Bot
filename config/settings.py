@@ -30,12 +30,19 @@ ANGEL_TOTP_SECRET = os.getenv("ANGEL_TOTP_SECRET")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
 
-# --- Risk Rules ---
+# --- Paper trading budget ---
+# Starting (virtual) capital for the paper trader.
+PAPER_CAPITAL = float(os.getenv("PAPER_CAPITAL", 500000))   # ₹5,00,000
+
+# --- Risk Rules (all env-overridable) ---
+# max_capital_per_trade is a FRACTION of capital allocated per trade.
+#   0.5 of ₹5,00,000 = ₹2,50,000 max capital/margin per trade.
+# Loss limits are scaled to the larger book; raise/lower via env as needed.
 RISK_RULES = {
-    "max_daily_loss":        -5000,
-    "max_per_trade_loss":    -1500,
-    "max_open_positions":    3,
-    "max_capital_per_trade": 0.20,
+    "max_daily_loss":        float(os.getenv("MAX_DAILY_LOSS",      -25000)),
+    "max_per_trade_loss":    float(os.getenv("MAX_PER_TRADE_LOSS",  -10000)),
+    "max_open_positions":    int(os.getenv("MAX_OPEN_POSITIONS",         3)),
+    "max_capital_per_trade": float(os.getenv("MAX_CAPITAL_PER_TRADE",  0.5)),
 }
 
 # --- Instruments ---
