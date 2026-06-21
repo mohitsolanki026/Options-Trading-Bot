@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, date
 from config.settings import RISK_RULES
-from config.settings import INDICES, ACTIVE_INDICES
+from config.settings import INDICES, ACTIVE_INDICES, CORRELATION_GROUPS, MAX_CORRELATED_SHORT
 
 logger = logging.getLogger(__name__)
 
@@ -215,8 +215,26 @@ class RiskManager:
         }
 
 
+    def correlation_ok(self, index: str, overall_bias: str, open_trades: dict) -> tuple:
+        """
+        Block a SHORT-premium entry if the index's correlation group already holds
+        MAX_CORRELATED_SHORT short-vol positions. Two short straddles on NIFTY +
+        BANKNIFTY is 2× the same vol bet, not diversification. Directional/long
+        trades are not capped here. Returns (ok, reason).
+        """
+        if overall_bias != "SELL_PREMIUM":
+            return True, ""
+        group = next((g for g in CORRELATION_GROUPS if index in g), [index])
+        short_in_group = sum(
+            1 for idx, pos in open_trades.items()
+            if idx in group and pos.get("direction") == "SELL"
+        )
+        if short_in_group >= MAX_CORRELATED_SHORT:
+            return False, f"{short_in_group} short-vol already in {group}"
+        return True, ""
+
     def cap_lots_by_margin(self, obj, index, strategy, summary, df_oi, options_df,
-                           lot_size, expiry, capital, max_lots) -> int:
+                           lot_size, expiry, capital, max_lots, greeks=None) -> int:
         """
         Cap lot count so the REAL Angel margin for the chosen legs stays within
         the per-trade capital allocation. One margin API call; scales down
@@ -230,7 +248,7 @@ class RiskManager:
 
         position = strategies.build_position(
             index, strategy, summary, df_oi, options_df,
-            max_lots, lot_size, expiry,
+            max_lots, lot_size, expiry, greeks=greeks,
         )
         if not position:
             return 0

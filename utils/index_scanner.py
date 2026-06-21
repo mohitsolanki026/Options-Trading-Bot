@@ -8,6 +8,7 @@ from utils.options_helper import (
 from utils.greeks_engine import analyse_atm_greeks
 from utils.regime_detector import detect_regime
 from utils.signal_engine import run_confluence
+from utils.iv_history import record_iv, get_iv_rank
 from utils.llm_brain import get_trade_decision
 from utils.trade_journal import log_signal
 from utils.telegram_helper import send_message, send_alert
@@ -16,13 +17,19 @@ from utils.technical import run_technical_analysis
 
 logger = logging.getLogger(__name__)
 
-def analyze_index(obj, df_scrip, index_key, vix_ltp, risk_status, position=None):
+def analyze_index(obj, df_scrip, index_key, vix_ltp, risk_status, position=None,
+                  with_llm: bool = True):
     """
     Run the full analysis pipeline for one index and return the result.
 
     PURE w.r.t. Telegram — sends NO messages (except a failure alert), so it is
     safe to call every monitor cycle. Use ``scan_and_broadcast`` for the daily
     scan that should also push a summary to Telegram.
+
+    with_llm : when False, the (slow, paid) LLM call is skipped — the code gate
+    decides entries and hard rules manage exits. The monitor uses this on routine
+    cycles; the LLM is invoked separately as an entry *veto* only when the gate is
+    about to act (see monitor.handle_enter). Cuts ~150 LLM calls/day → a handful.
     """
     idx = INDICES[index_key]
     logger.info(f"\n{'='*40}")
@@ -69,6 +76,11 @@ def analyze_index(obj, df_scrip, index_key, vix_ltp, risk_status, position=None)
         greeks  = analyse_atm_greeks(summary, expiry)
         logger.info(f"🧮 {index_key} Greeks: IV={greeks['avg_iv']}% Theta={greeks['theta']}")
 
+        # ── 4b. IV rank (record today's IV, rank vs trailing history) ──
+        avg_iv = float(greeks["avg_iv"] or 0.0)
+        record_iv(index_key, avg_iv)
+        iv_rank = get_iv_rank(index_key, avg_iv)
+
         # ── 5. Regime ─────────────────────
         regime  = detect_regime(
             vix            = vix_ltp,
@@ -83,29 +95,31 @@ def analyze_index(obj, df_scrip, index_key, vix_ltp, risk_status, position=None)
         # ── 6. Confluence ──────────────────
         confluence = run_confluence(
             pcr            = float(summary["pcr"] or 0),
-            sentiment      = summary["sentiment"],
             support        = float(summary["support"] or 0),
             resistance     = float(summary["resistance"] or 0),
             nifty_spot     = summary["nifty_spot"],
-            avg_iv         = float(greeks["avg_iv"] or 0.0),
             vix            = vix_ltp,
             days_to_expiry = greeks["days_to_exp"],
-            theta          = float(greeks["theta"] or 0.0),
             regime         = regime["regime"],
+            iv_rank        = iv_rank,
             ta             = ta,
         )
 
-        # ── 7. LLM decision ───────────────
-        decision    = get_trade_decision(
-            summary     = summary,
-            greeks      = greeks,
-            regime      = regime,
-            confluence  = confluence,
-            risk_status = risk_status,
-            vix         = vix_ltp,
-            position    = position,
-            ta          = ta,
-        )
+        # ── 7. LLM decision (skipped on routine cycles; used as entry veto only) ──
+        if with_llm:
+            decision = get_trade_decision(
+                summary     = summary,
+                greeks      = greeks,
+                regime      = regime,
+                confluence  = confluence,
+                risk_status = risk_status,
+                vix         = vix_ltp,
+                position    = position,
+                ta          = ta,
+            )
+        else:
+            decision = {"action": "NONE", "confidence": "NONE",
+                        "strategy": None, "reasoning": "LLM skipped (routine cycle)"}
 
         # ── 8. Log ────────────────────────
         log_signal(
@@ -130,6 +144,7 @@ def analyze_index(obj, df_scrip, index_key, vix_ltp, risk_status, position=None)
             "confluence": confluence,
             "decision":   decision,
             "ta":         ta,
+            "iv_rank":    iv_rank,
         }
 
         logger.info(f"✅ {index_key} → {decision.get('action')} ({regime['regime']})")

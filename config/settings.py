@@ -45,6 +45,16 @@ RISK_RULES = {
     "max_capital_per_trade": float(os.getenv("MAX_CAPITAL_PER_TRADE",  0.5)),
 }
 
+# --- Entry-quality / portfolio controls ---
+ENTRY_COOLDOWN_MIN   = int(os.getenv("ENTRY_COOLDOWN_MIN", 30))    # no re-entry for N min after an exit
+MAX_CORRELATED_SHORT = int(os.getenv("MAX_CORRELATED_SHORT", 1))   # max short-vol positions per correlated group
+# Index options that move together (so two short straddles ≠ diversification).
+CORRELATION_GROUPS   = [["NIFTY", "BANKNIFTY", "FINNIFTY"]]
+# Execution-quality knobs
+MIN_LEG_OI           = int(os.getenv("MIN_LEG_OI", 500))          # skip illiquid legs
+MIN_CREDIT_PCT       = float(os.getenv("MIN_CREDIT_PCT", 0.004))  # min net credit as % of spot for sells
+STRANGLE_TARGET_DELTA = float(os.getenv("STRANGLE_TARGET_DELTA", 0.16))
+
 # --- Instruments ---
 NIFTY_SYMBOL     = "Nifty 50"
 NIFTY_TOKEN      = "99926000"

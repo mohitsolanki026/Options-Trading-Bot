@@ -26,6 +26,7 @@ class PaperTrader:
         self.capital          = starting_capital
         self.trades           = []      # closed trades
         self.open_trades      = {}      # index -> position dict
+        self.last_exit        = {}      # index -> ISO timestamp of last exit
         self.trade_count      = 0
         self.wins             = 0
         self.losses           = 0
@@ -114,6 +115,7 @@ class PaperTrader:
 
             self.trades.append(position)
             del self.open_trades[index]
+            self.last_exit[index] = datetime.now().isoformat()
 
             log_trade_exit(
                 trade_id   = position.get("journal_id", position["id"]),
@@ -140,6 +142,19 @@ class PaperTrader:
         if not position:
             return "HOLD"
         return strategies.check_levels(position, price_map)
+
+    def in_cooldown(self, index: str, minutes: int) -> tuple:
+        """(True, reason) if this index exited a trade within the last `minutes`."""
+        ts = self.last_exit.get(index)
+        if not ts:
+            return False, ""
+        try:
+            elapsed = (datetime.now() - datetime.fromisoformat(ts)).total_seconds() / 60
+        except (ValueError, TypeError):
+            return False, ""
+        if elapsed < minutes:
+            return True, f"{round(minutes - elapsed)}min left after last exit"
+        return False, ""
 
     # ─────────────────────────────────────
     #  STATS
@@ -219,6 +234,7 @@ class PaperTrader:
                 "losses":           self.losses,
                 "trades":           self.trades,
                 "open_trades":      self.open_trades,
+                "last_exit":        self.last_exit,
             }
             tmp = STATE_FILE + ".tmp"
             with open(tmp, "w") as f:
@@ -248,6 +264,7 @@ class PaperTrader:
         self.losses           = state.get("losses", 0)
         self.trades           = state.get("trades", [])
         self.open_trades      = state.get("open_trades", {})
+        self.last_exit        = state.get("last_exit", {})
 
         if self.open_trades:
             logger.warning(

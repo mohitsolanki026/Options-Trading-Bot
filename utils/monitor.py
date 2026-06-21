@@ -4,12 +4,14 @@ from datetime import datetime, date
 from utils.angel_helper import fetch_ltp
 from utils.index_scanner import analyze_index
 from utils.signal_engine import entry_allowed
+from utils.event_calendar import is_blackout
 from utils import strategies
 from utils.telegram_helper import send_message, send_alert
 from utils.websocket_feed import TICK_STORE
 from config.settings import (
     INDICES, ACTIVE_INDICES,
     INDIA_VIX_SYMBOL, INDIA_VIX_TOKEN,
+    ENTRY_COOLDOWN_MIN,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,8 +114,10 @@ def run_monitor_cycle(STATE: dict):
     for index_key in ACTIVE_INDICES:
         try:
             position = pt.get_position(index_key)
+            # Routine cycle → no LLM (the gate decides; LLM is an entry veto only).
             result = analyze_index(
-                obj, STATE["df_scrip"], index_key, vix_ltp, risk_status, position
+                obj, STATE["df_scrip"], index_key, vix_ltp, risk_status, position,
+                with_llm=False,
             )
             if not result:
                 continue
@@ -175,18 +179,58 @@ def manage_index(STATE: dict, index_key: str, result: dict):
     # ── 4. No position → CODE-GATED entry ──
     confluence  = result["confluence"]
     risk_status = rm.get_status()
+    dte         = result.get("greeks", {}).get("days_to_exp")
     allowed, reason = entry_allowed(
         confluence      = confluence,
         risk_status     = risk_status,
         open_count      = pt.open_count(),
         max_positions   = rm.max_open_positions,
         in_entry_window = is_safe_to_enter(),
+        blackout        = is_blackout(dte),
+        in_cooldown     = pt.in_cooldown(index_key, ENTRY_COOLDOWN_MIN),
+        correlation     = rm.correlation_ok(index_key, confluence.get("overall_bias"), pt.open_trades),
     )
     if not allowed:
         logger.info(f"⚪ {index_key} no entry @ {now_str}: {reason}")
         return
 
+    # Code approved the trade → ask the LLM ONLY as a final veto (advisory).
+    if not _llm_approves_entry(STATE, index_key, result):
+        return
+
     handle_enter(STATE, index_key, result)
+
+
+def _llm_approves_entry(STATE: dict, index_key: str, result: dict) -> bool:
+    """
+    The code gate already approved. Ask the LLM once, as a veto: it can object
+    (action == SKIP) but cannot force a trade. Also lets it suggest the strategy.
+    Fail-open: if the LLM errors, the code-approved trade still proceeds.
+    """
+    from utils.llm_brain import get_trade_decision
+    rm = STATE["risk_manager"]
+    try:
+        decision = get_trade_decision(
+            summary     = result["summary"],
+            greeks      = result["greeks"],
+            regime      = result["regime"],
+            confluence  = result["confluence"],
+            risk_status = rm.get_status(),
+            vix         = STATE.get("vix_ltp"),
+            position    = None,
+            ta          = result.get("ta"),
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ {index_key} LLM veto unavailable ({e}) — proceeding on code gate.")
+        return True
+
+    result["decision"] = decision   # let select_strategy honour its suggestion
+    if decision.get("action") == "SKIP":
+        reason = decision.get("reasoning", "")[:120]
+        logger.info(f"🛑 {index_key} LLM vetoed entry: {reason}")
+        send_alert(f"🛑 {index_key} LLM Veto", reason, emoji="🛑")
+        return False
+    return True
 
 
 # ─────────────────────────────────────────
@@ -205,6 +249,7 @@ def handle_enter(STATE: dict, index_key: str, result: dict):
     confluence = result["confluence"]
     regime     = result["regime"]
     decision   = result["decision"]
+    greeks     = result.get("greeks")
 
     # Reference premium for rough sizing (real margin is applied in approve_trade)
     ref_price = float(summary.get("atm_ce_ltp", 0)) + float(summary.get("atm_pe_ltp", 0))
@@ -226,7 +271,7 @@ def handle_enter(STATE: dict, index_key: str, result: dict):
         obj=STATE.get("obj"), index=index_key, strategy=strategy,
         summary=summary, df_oi=df_oi, options_df=options_df,
         lot_size=lot_size, expiry=result["expiry"],
-        capital=pt.capital, max_lots=lots,
+        capital=pt.capital, max_lots=lots, greeks=greeks,
     )
     if lots < 1:
         logger.warning(f"🚫 {index_key} entry blocked: margin exceeds allocation.")
@@ -237,7 +282,7 @@ def handle_enter(STATE: dict, index_key: str, result: dict):
     position = strategies.build_position(
         index=index_key, strategy=strategy, summary=summary,
         df_oi=df_oi, options_df=options_df, lots=lots,
-        lot_size=lot_size, expiry=result["expiry"],
+        lot_size=lot_size, expiry=result["expiry"], greeks=greeks,
     )
     if not position:
         send_alert(f"⚠️ {index_key} Build Failed",

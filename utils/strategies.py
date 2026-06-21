@@ -19,7 +19,13 @@ better" holds for every strategy and the monitors stay strategy-agnostic.
 
 import logging
 
+from utils.greeks_engine import calculate_greeks
+from config.settings import (
+    MIN_LEG_OI, MIN_CREDIT_PCT, STRANGLE_TARGET_DELTA,
+)
+
 logger = logging.getLogger(__name__)
+RISK_FREE_RATE = 0.065
 
 
 # ─────────────────────────────────────────
@@ -38,9 +44,10 @@ def _short_straddle(_):
 
 
 def _short_strangle(_):
+    # Strikes chosen by delta when greeks are available (else ±1 strike fallback).
     return [
-        {"offset": +1, "type": "CE", "action": "SELL"},
-        {"offset": -1, "type": "PE", "action": "SELL"},
+        {"offset": +1, "type": "CE", "action": "SELL", "target_delta": STRANGLE_TARGET_DELTA},
+        {"offset": -1, "type": "PE", "action": "SELL", "target_delta": STRANGLE_TARGET_DELTA},
     ]
 
 
@@ -128,15 +135,15 @@ def select_strategy(confluence: dict, regime: dict, decision: dict = None) -> st
 
     bias = (confluence or {}).get("overall_bias", "NEUTRAL")
 
-    if bias == "SELL PREMIUM":
-        return "short_straddle"
-    if bias == "BUY OPTIONS":
+    if bias == "SELL_PREMIUM":
+        return "short_strangle"   # defined OTM short vol, delta-selected strikes
+    if bias == "BUY_OPTIONS":
         return "long_straddle"
     if bias == "BULLISH":
         return "bull_call_spread"
     if bias == "BEARISH":
         return "bear_put_spread"
-    # Neutral / range-bound → sell premium is the house edge
+    # Neutral shouldn't reach here (gate requires confirmed bias); safe default.
     return "short_straddle"
 
 
@@ -144,13 +151,15 @@ def select_strategy(confluence: dict, regime: dict, decision: dict = None) -> st
 #  PRICE / TOKEN RESOLUTION
 # ─────────────────────────────────────────
 
-def _resolve_leg(strike: float, opt_type: str, df_oi, options_df) -> dict:
-    """Return {ltp, token, symbol} for a strike+type, or None if unavailable."""
+def _resolve_leg(strike: float, opt_type: str, df_oi, options_df, min_oi: int = 0) -> dict:
+    """Return {ltp, token, symbol} for a strike+type, or None if unavailable/illiquid."""
     ltp = 0.0
+    oi  = 0
     if df_oi is not None and not df_oi.empty:
         row = df_oi[df_oi["strike"] == strike]
         if not row.empty:
             ltp = float(row.iloc[0].get(f"{opt_type}_LTP", 0) or 0)
+            oi  = float(row.iloc[0].get(f"{opt_type}_OI", 0) or 0)
 
     token = None
     symbol = None
@@ -166,7 +175,22 @@ def _resolve_leg(strike: float, opt_type: str, df_oi, options_df) -> dict:
 
     if ltp <= 0 or token is None:
         return None
+    if min_oi and oi < min_oi:
+        logger.warning(f"⚠️ {opt_type} {int(strike)} illiquid (OI {int(oi)} < {min_oi}) — skip.")
+        return None
     return {"ltp": ltp, "token": token, "symbol": symbol}
+
+
+def _select_strike_by_delta(strikes, target_delta, opt_type, spot, T, sigma) -> float:
+    """Pick the strike whose Black-Scholes |delta| is closest to target_delta."""
+    best, best_diff = None, 1e9
+    for K in strikes:
+        g = calculate_greeks(spot, K, T, RISK_FREE_RATE, sigma, opt_type)
+        d = abs(g.get("delta") or 0)
+        diff = abs(d - target_delta)
+        if diff < best_diff:
+            best_diff, best = diff, K
+    return best
 
 
 def build_position(
@@ -179,10 +203,17 @@ def build_position(
     lot_size: int,
     expiry: str,
     trade_id: int = 0,
+    greeks: dict = None,
+    min_oi: int = MIN_LEG_OI,
+    min_credit_pct: float = MIN_CREDIT_PCT,
 ) -> dict:
     """
     Build a concrete, priced position for `strategy`.
-    Returns a position dict, or None if any leg could not be priced.
+
+    Returns a position dict, or None if a leg can't be priced, a leg is illiquid
+    (OI < min_oi), or a short-premium trade's net credit is too thin
+    (< min_credit_pct of spot). When `greeks` is supplied, legs flagged with a
+    target_delta are strike-selected by delta instead of a fixed offset.
     """
     key = normalise_strategy(strategy)
     if key is None:
@@ -191,16 +222,29 @@ def build_position(
 
     builder, sl_pct, target_pct = STRATEGIES[key]
     atm_strike = summary["atm_strike"]
-    # Infer strike gap from the chain (spacing between adjacent strikes)
+    spot       = summary.get("nifty_spot", atm_strike)
     strike_gap = _infer_strike_gap(df_oi, fallback=50)
+
+    # Delta-selection inputs (only used for target_delta legs)
+    dte   = (greeks or {}).get("days_to_exp")
+    T     = max((dte or 0), 0) / 365 if dte is not None else 0
+    sigma = float((greeks or {}).get("avg_iv") or 0) / 100
+    all_strikes = sorted(df_oi["strike"].unique()) if df_oi is not None and not df_oi.empty else []
 
     legs = []
     for abstract in builder(summary):
         strike = atm_strike + abstract["offset"] * strike_gap
-        resolved = _resolve_leg(strike, abstract["type"], df_oi, options_df)
+        # Prefer delta-based strike selection when we have the inputs
+        if abstract.get("target_delta") and T > 0 and sigma > 0 and all_strikes:
+            picked = _select_strike_by_delta(
+                all_strikes, abstract["target_delta"], abstract["type"], spot, T, sigma
+            )
+            if picked is not None:
+                strike = picked
+        resolved = _resolve_leg(strike, abstract["type"], df_oi, options_df, min_oi=min_oi)
         if resolved is None:
             logger.warning(
-                f"⚠️ {index} {key}: could not price {abstract['type']} @ {strike}"
+                f"⚠️ {index} {key}: could not price/illiquid {abstract['type']} @ {strike}"
             )
             return None
         legs.append({
@@ -216,11 +260,24 @@ def build_position(
 
     # Net premium magnitude per unit (credit positive, debit negative)
     net_credit = sum(_sign(l) * l["entry_ltp"] for l in legs)
+    direction = "SELL" if net_credit >= 0 else "BUY"
+
+    # Minimum-credit filter: don't sell thin premium (full tail risk, no reward)
+    if direction == "SELL" and min_credit_pct and spot:
+        if net_credit < min_credit_pct * spot:
+            logger.warning(
+                f"⚠️ {index} {key}: credit ₹{net_credit:.1f} < "
+                f"{min_credit_pct*100:.2f}% of spot — skip thin premium."
+            )
+            return None
+
+    # Vol/gamma-aware SL & target: tighten near expiry (gamma risk spikes).
+    if dte is not None and dte <= 1:
+        sl_pct, target_pct = sl_pct * 0.8, target_pct * 0.7
+
     premium_value = abs(net_credit) * lot_size * lots
     stop_loss_pnl = round(-sl_pct * premium_value, 2)
     target_pnl    = round(+target_pct * premium_value, 2)
-
-    direction = "SELL" if net_credit >= 0 else "BUY"
 
     return {
         "id":             trade_id,

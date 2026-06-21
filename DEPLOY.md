@@ -131,3 +131,23 @@ required, so don't stop the instance overnight.
 - On restart, the bot restores any open position and force-exits it if expired.
 - This deploys **paper mode**. Before going live (real orders), you'll add the broker
   order layer and re-verify — do not point this at real capital yet.
+
+## Entry logic & tuning
+
+Entries are gated in **code** (`utils/signal_engine.py:entry_allowed`), not by the LLM.
+A trade requires: a weighted confluence score ≥ threshold, a **confirmed directional/vol
+bias**, rich **IV rank** for premium selling, no event/expiry blackout, no post-exit
+cooldown, and correlation limits — then the LLM is asked once as a **veto** only.
+
+All thresholds are env-tunable (see `.env.development`): `MAX_CAPITAL_PER_TRADE`,
+`MAX_CORRELATED_SHORT`, `ENTRY_COOLDOWN_MIN`, `EXPIRY_BLACKOUT_DTE`,
+`EVENT_BLACKOUT_DATES`, `IV_MIN_HISTORY`, `MIN_LEG_OI`, `MIN_CREDIT_PCT`,
+`STRANGLE_TARGET_DELTA`.
+
+**Two things need real-world calibration, not guesses:**
+1. **IV rank needs history.** Until `IV_MIN_HISTORY` days of IV are recorded per index
+   (`data/iv_history.json`), premium-selling is correctly *blocked* (fail-safe). Let the
+   bot run in paper for a few weeks to build the history before judging it.
+2. **Validate the signal weights / threshold with `utils/backtester.py`** against
+   historical data rather than trusting the defaults. Maintain the macro-event list in
+   `EVENT_BLACKOUT_DATES` / `data/event_blackout.json` (RBI, Fed, Budget).
