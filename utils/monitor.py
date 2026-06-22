@@ -128,6 +128,8 @@ def run_monitor_cycle(STATE: dict):
         except Exception as e:
             logger.error(f"❌ Monitor failed for {index_key}: {e}", exc_info=True)
 
+        # Wait for 1 minute to avoid rate limit error
+        time.sleep(30)
 
 def manage_index(STATE: dict, index_key: str, result: dict):
     """Manage a single index: stop-loss / target / EOD / LLM exit, or entry."""
