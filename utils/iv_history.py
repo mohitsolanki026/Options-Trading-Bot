@@ -17,6 +17,7 @@ import threading
 from datetime import date
 
 from utils.greeks_engine import calculate_iv_rank
+from config.settings import INDIA_VIX_TOKEN
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ MAX_DAYS    = 252            # ~1 trading year
 MIN_HISTORY = int(os.getenv("IV_MIN_HISTORY", 10))   # need this many days first
 
 _lock = threading.Lock()
+_vix_cache = {"date": None, "closes": None}   # India VIX daily closes, cached per day
 
 
 def _load() -> dict:
@@ -60,6 +62,31 @@ def record_iv(index: str, avg_iv: float, today: str = None) -> None:
             series.append({"d": today, "iv": round(float(avg_iv), 2)})
         data[index] = series[-MAX_DAYS:]
         _save(data)
+
+
+def get_vix_rank(obj, current_vix: float):
+    """
+    India-VIX percentile over its trailing daily history — a market-wide IV-rank
+    PROXY usable on day 1 (VIX has years of history), used until per-index IV
+    history accumulates. VIX is NIFTY's implied vol; for BANKNIFTY it is a
+    correlated approximation. Daily closes are cached once per day.
+    """
+    if not obj or not current_vix:
+        return None
+    today = date.today().isoformat()
+    if _vix_cache["date"] != today or _vix_cache["closes"] is None:
+        try:
+            from utils.technical import fetch_candles
+            df = fetch_candles(obj, INDIA_VIX_TOKEN, interval="ONE_DAY", days_back=150)
+            _vix_cache["closes"] = list(df["close"]) if not df.empty else []
+        except Exception as e:
+            logger.error(f"❌ VIX history fetch failed: {e}")
+            _vix_cache["closes"] = []
+        _vix_cache["date"] = today
+    closes = _vix_cache["closes"]
+    if len(closes) < MIN_HISTORY:
+        return None
+    return calculate_iv_rank(current_vix, closes)
 
 
 def get_iv_rank(index: str, current_iv: float):

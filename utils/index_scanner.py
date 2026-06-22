@@ -8,7 +8,7 @@ from utils.options_helper import (
 from utils.greeks_engine import analyse_atm_greeks
 from utils.regime_detector import detect_regime
 from utils.signal_engine import run_confluence
-from utils.iv_history import record_iv, get_iv_rank
+from utils.iv_history import record_iv, get_iv_rank, get_vix_rank
 from utils.llm_brain import get_trade_decision
 from utils.trade_journal import log_signal
 from utils.telegram_helper import send_message, send_alert
@@ -80,6 +80,11 @@ def analyze_index(obj, df_scrip, index_key, vix_ltp, risk_status, position=None,
         avg_iv = float(greeks["avg_iv"] or 0.0)
         record_iv(index_key, avg_iv)
         iv_rank = get_iv_rank(index_key, avg_iv)
+        if iv_rank is None:
+            # Bootstrap: use India-VIX percentile until per-index history builds.
+            iv_rank = get_vix_rank(obj, vix_ltp)
+            if iv_rank is not None:
+                logger.info(f"📈 {index_key} IV rank (VIX proxy): {iv_rank}")
 
         # ── 5. Regime ─────────────────────
         regime  = detect_regime(

@@ -66,9 +66,9 @@ def test_retries_then_succeeds_on_transient_empty_body(monkeypatch):
     assert obj.calls == 2
 
 
-def test_payload_has_no_orderType_and_is_intraday():
+def test_payload_is_intraday_market_with_orderType():
     obj = FakeObj({"status": True, "data": {"totalMarginRequired": 1.0}})
     fetch_required_margin(obj, LEGS)
     pos = obj.last_params["positions"][0]
-    assert "orderType" not in pos              # extra keys make the gateway 500/empty
     assert pos["productType"] == "INTRADAY"
+    assert pos["orderType"] == "MARKET"        # required by Angel (errorcode AB4033)

@@ -94,6 +94,7 @@ def fetch_required_margin(obj, legs, lot_size: int = None, exchange: str = "NFO"
             "productType": product_type,
             "token":       str(leg["token"]),
             "tradeType":   "SELL" if leg["action"] == "SELL" else "BUY",
+            "orderType":   "MARKET",   # required by the margin API (errorcode AB4033)
         })
 
     payload = {"positions": positions}

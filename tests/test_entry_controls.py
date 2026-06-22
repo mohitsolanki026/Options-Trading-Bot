@@ -26,6 +26,21 @@ def test_iv_rank_percentile_after_history(monkeypatch, tmp_path):
     assert ivh.get_iv_rank("NIFTY", 10) == 0.0            # current is the low
 
 
+def test_vix_rank_seed_on_day_one(monkeypatch):
+    """VIX percentile gives a usable IV-rank proxy before per-index history exists."""
+    import pandas as pd
+    monkeypatch.setattr(ivh, "MIN_HISTORY", 3)
+    ivh._vix_cache["date"] = None
+    closes = pd.DataFrame({"close": [10, 12, 14, 16, 20]})
+    monkeypatch.setattr("utils.technical.fetch_candles", lambda *a, **k: closes)
+
+    class Obj:  # any truthy object
+        pass
+    assert ivh.get_vix_rank(Obj(), 20) == 100.0
+    assert ivh.get_vix_rank(Obj(), 10) == 0.0
+    assert ivh.get_vix_rank(None, 15) is None     # no client → no proxy
+
+
 def test_iv_same_day_updates_in_place(monkeypatch, tmp_path):
     monkeypatch.setattr(ivh, "IV_HISTORY_FILE", str(tmp_path / "iv.json"))
     ivh.record_iv("NIFTY", 14.0, today="2026-06-01")
