@@ -65,17 +65,25 @@ def get_available_expiries(df, name="NIFTY"):
     return expiries
 
 def get_available_expiries_for_index(df, index_name: str):
-    """Get sorted expiry list for any index."""
+    """Get sorted expiry list — nearest first."""
     from datetime import datetime as dt
     options = df[
         (df["name"] == index_name) &
         (df["instrumenttype"] == "OPTIDX") &
         (df["exch_seg"] == "NFO")
     ]
-    expiries = sorted(
-        options["expiry"].unique().tolist(),
-        key=lambda e: dt.strptime(e, "%d%b%Y") if len(e) == 9 else dt.max
-    )
+    expiries = options["expiry"].unique().tolist()
+
+    # Filter out expiries more than 45 days away
+    today = dt.today()
+    def parse(e):
+        try:
+            return dt.strptime(e, "%d%b%Y")
+        except:
+            return dt.max
+
+    expiries = [e for e in expiries if (parse(e) - today).days <= 45]
+    expiries = sorted(expiries, key=parse)
     return expiries
 
 def fetch_oi_data(obj, options_df, nifty_spot: float, num_strikes: int = 10):

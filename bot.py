@@ -1,4 +1,5 @@
 import threading
+import time
 from utils.monitor import start_monitor
 import logging
 from datetime import datetime
@@ -159,6 +160,7 @@ def market_open_scan():
 
     results = {}
     for index_key in ACTIVE_INDICES:
+        time.sleep(10)        
         try:
             result = scan_index(
                 obj               = obj,
