@@ -23,7 +23,20 @@ logger = logging.getLogger(__name__)
 
 IV_HISTORY_FILE = "data/iv_history.json"
 MAX_DAYS    = 252            # ~1 trading year
-MIN_HISTORY = int(os.getenv("IV_MIN_HISTORY", 10))   # need this many days first
+MIN_HISTORY = int(os.getenv("IV_MIN_HISTORY", 10))   # fallback only
+
+
+def _min_history() -> int:
+    """
+    How many daily readings are required before an IV rank is trusted.
+    A dashboard override wins; otherwise the env-derived module constant does.
+    """
+    try:
+        from utils import settings_store
+        chosen = settings_store.override("iv_min_history")
+    except Exception:
+        chosen = None
+    return MIN_HISTORY if chosen is None else chosen
 
 _lock = threading.Lock()
 _vix_cache = {"date": None, "closes": None}   # India VIX daily closes, cached per day
@@ -84,7 +97,7 @@ def get_vix_rank(obj, current_vix: float):
             _vix_cache["closes"] = []
         _vix_cache["date"] = today
     closes = _vix_cache["closes"]
-    if len(closes) < MIN_HISTORY:
+    if len(closes) < _min_history():
         return None
     return calculate_iv_rank(current_vix, closes)
 
@@ -98,7 +111,26 @@ def get_iv_rank(index: str, current_iv: float):
         data = _load()
     series = data.get(index, [])
     ivs = [row["iv"] for row in series if row.get("iv")]
-    if len(ivs) < MIN_HISTORY:
-        logger.info(f"📈 {index} IV history {len(ivs)}/{MIN_HISTORY} — IV rank unknown.")
+    need = _min_history()
+    if len(ivs) < need:
+        logger.info(f"📈 {index} IV history {len(ivs)}/{need} — IV rank unknown.")
         return None
     return calculate_iv_rank(current_iv, ivs)
+
+
+def history_status() -> dict:
+    """
+    Days of IV history recorded per index, and whether that is enough to allow
+    premium selling. The dashboard's health page reads this.
+    """
+    with _lock:
+        data = _load()
+    need = _min_history()
+    return {
+        index: {
+            "days":  len([r for r in rows if r.get("iv")]),
+            "need":  need,
+            "ready": len([r for r in rows if r.get("iv")]) >= need,
+        }
+        for index, rows in data.items()
+    }

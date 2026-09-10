@@ -1,12 +1,14 @@
-import time
 import logging
+import threading
+import time
 from datetime import datetime, date
 from utils.angel_helper import fetch_ltp
 from utils.index_scanner import analyze_index
-from utils.signal_engine import entry_allowed
+from utils.signal_engine import evaluate_entry
 from utils.event_calendar import is_blackout
-from utils import strategies
-from utils.telegram_helper import send_message, send_alert
+from utils import events, settings_store, strategies
+from utils.runtime import RUNTIME
+from utils.trade_journal import log_gate
 from utils.websocket_feed import TICK_STORE
 from config.settings import (
     INDICES, ACTIVE_INDICES,
@@ -17,6 +19,49 @@ from config.settings import (
 logger = logging.getLogger(__name__)
 
 MONITOR_INTERVAL = 300  # 5 minutes
+
+# Set to cut the wait short. The dashboard's "check now" uses this instead of
+# spawning a second cycle, so two scans can never overlap.
+_wake = threading.Event()
+
+
+def request_rescan():
+    """Ask the monitor loop to run its next cycle immediately."""
+    _wake.set()
+
+
+def active_indices() -> list:
+    """Indices to scan right now — editable from the dashboard, env is the default."""
+    try:
+        chosen = settings_store.override("active_indices")
+    except Exception:
+        chosen = None
+    picked = ACTIVE_INDICES if chosen is None else chosen
+    return [i for i in picked if i in INDICES] or list(ACTIVE_INDICES)
+
+
+def _cooldown_minutes() -> int:
+    try:
+        chosen = settings_store.override("entry_cooldown_min")
+    except Exception:
+        chosen = None
+    return ENTRY_COOLDOWN_MIN if chosen is None else chosen
+
+
+def _window() -> tuple:
+    """(start, end) of the new-entry window as minutes past midnight."""
+    def mins(value, fallback):
+        try:
+            h, m = str(value).split(":")
+            return int(h) * 60 + int(m)
+        except (ValueError, AttributeError):
+            return fallback
+    try:
+        start = settings_store.get("entry_window_start")
+        end   = settings_store.get("entry_window_end")
+    except Exception:
+        start, end = "09:40", "14:00"
+    return mins(start, 9 * 60 + 40), mins(end, 14 * 60)
 
 
 # ─────────────────────────────────────────
@@ -42,10 +87,14 @@ def is_market_hours() -> bool:
 
 
 def is_safe_to_enter() -> bool:
-    """No new entries before 9:40 AM or after 2:00 PM."""
+    """
+    True inside the configured new-entry window. Defaults to 9:40 am - 2:00 pm,
+    which skips the noisy open and leaves every trade time to work.
+    """
     now = datetime.now()
     t   = now.hour * 60 + now.minute
-    return (9 * 60 + 40) <= t <= (14 * 60 + 0)
+    start, end = _window()
+    return start <= t <= end
 
 
 def minutes_to_close() -> int:
@@ -78,9 +127,9 @@ def force_exit_all_on_startup(STATE: dict):
         pos = pt.open_trades[index_key]
         if expiry_passed(pos.get("expiry", "")):
             logger.warning(f"⚠️ {index_key} position expired ({pos.get('expiry')}) — forcing exit.")
-            send_alert("⚠️ Expired Position Exit",
-                f"{index_key} {pos.get('strategy')} expired — closing on startup.",
-                emoji="⚠️")
+            events.warning("position.expired", "Expired position closed",
+                f"The {pos.get('strategy')} on {index_key} had already expired, "
+                f"so it was closed as soon as the bot restarted.", index=index_key)
             df_oi = STATE.get("index_data", {}).get(index_key, {}).get("df_oi")
             handle_exit(STATE, index_key, "Expired position — startup forced exit", df_oi)
 
@@ -96,22 +145,27 @@ def run_monitor_cycle(STATE: dict):
         logger.warning("⚠️ Monitor cycle skipped — obj or scrip master not ready.")
         return
 
+    cycle_started = time.time()
     now_str = datetime.now().strftime("%H:%M")
     logger.info(f"🔄 Monitor cycle @ {now_str}")
 
     vix_ltp = fetch_ltp(obj, "NSE", INDIA_VIX_SYMBOL, INDIA_VIX_TOKEN)
     STATE["vix_ltp"] = vix_ltp
+    RUNTIME.series.record("vix", vix_ltp)
 
     if not STATE.get("risk_manager"):
         from utils.risk_manager import RiskManager
         STATE["risk_manager"] = RiskManager()
     rm = STATE["risk_manager"]
+    rm.refresh()                       # pick up anything changed in the dashboard
     pt = STATE["paper_trader"]
     risk_status = rm.get_status()
 
     STATE.setdefault("index_data", {})
+    indices = active_indices()
+    STATE["active_indices"] = indices
 
-    for index_key in ACTIVE_INDICES:
+    for index_key in indices:
         try:
             position = pt.get_position(index_key)
             # Routine cycle → no LLM (the gate decides; LLM is an entry veto only).
@@ -127,9 +181,19 @@ def run_monitor_cycle(STATE: dict):
 
         except Exception as e:
             logger.error(f"❌ Monitor failed for {index_key}: {e}", exc_info=True)
+            RUNTIME.health.note_error(e, where=f"monitor:{index_key}")
+            events.error("monitor.failed", f"Could not check {index_key}",
+                         str(e)[:300], index=index_key)
 
-        # Wait for 1 minute to avoid rate limit error
+        # Angel rate-limits hard; pace the per-index calls.
         time.sleep(30)
+
+    RUNTIME.health.set(
+        last_cycle_at=datetime.now().isoformat(timespec="seconds"),
+        last_cycle_ms=int((time.time() - cycle_started) * 1000),
+        next_cycle_at=datetime.fromtimestamp(
+            time.time() + MONITOR_INTERVAL).isoformat(timespec="seconds"),
+    )
 
 def manage_index(STATE: dict, index_key: str, result: dict):
     """Manage a single index: stop-loss / target / EOD / LLM exit, or entry."""
@@ -146,11 +210,9 @@ def manage_index(STATE: dict, index_key: str, result: dict):
         price_map = strategies.current_price_map(position, TICK_STORE, df_oi)
         level = pt.check_levels(index_key, price_map)
         if level == "STOP_LOSS":
-            send_alert(f"🛑 {index_key} Stop Loss", "Premium against us.", emoji="🛑")
             handle_exit(STATE, index_key, "Stop loss triggered", df_oi)
             return
         if level == "TARGET":
-            send_alert(f"🎯 {index_key} Target", "Target reached.", emoji="🎯")
             handle_exit(STATE, index_key, "Target achieved", df_oi)
             return
 
@@ -160,15 +222,18 @@ def manage_index(STATE: dict, index_key: str, result: dict):
             handle_exit(STATE, index_key, "EOD forced exit — market closed", df_oi)
             return
         if mins <= 30:
-            send_alert(f"⏰ {index_key} EOD Exit",
-                f"{mins} min to close — never carry overnight.", emoji="⏰")
             handle_exit(STATE, index_key, f"EOD forced exit — {mins}min to close", df_oi)
             return
-        if mins <= 60:
-            send_alert(f"⚠️ {index_key} 60 Min Warning",
-                f"Will force-exit {position['strategy']} at the 30min mark.", emoji="⚠️")
+        if mins <= 60 and not position.get("_warned_60"):
+            position["_warned_60"] = True
+            events.info("position.closing_soon", f"{index_key} closes within the hour",
+                f"The {position['strategy']} will be closed automatically "
+                f"about 30 minutes before the market shuts.", index=index_key)
 
         # ── 3. LLM-advised exit / adjust (advisory) ──
+        _log_gate_state(index_key, result, state="holding",
+                        blocking="Already holding a position here")
+
         action = decision.get("action", "HOLD")
         if action == "EXIT":
             handle_exit(STATE, index_key, decision.get("reasoning", "LLM exit"), df_oi)
@@ -182,18 +247,22 @@ def manage_index(STATE: dict, index_key: str, result: dict):
     confluence  = result["confluence"]
     risk_status = rm.get_status()
     dte         = result.get("greeks", {}).get("days_to_exp")
-    allowed, reason = entry_allowed(
+    verdict = evaluate_entry(
         confluence      = confluence,
         risk_status     = risk_status,
         open_count      = pt.open_count(),
         max_positions   = rm.max_open_positions,
         in_entry_window = is_safe_to_enter(),
         blackout        = is_blackout(dte),
-        in_cooldown     = pt.in_cooldown(index_key, ENTRY_COOLDOWN_MIN),
+        in_cooldown     = pt.in_cooldown(index_key, _cooldown_minutes()),
         correlation     = rm.correlation_ok(index_key, confluence.get("overall_bias"), pt.open_trades),
     )
-    if not allowed:
-        logger.info(f"⚪ {index_key} no entry @ {now_str}: {reason}")
+    # Every check is stored, not just the first failure, so the dashboard can
+    # explain a quiet day instead of showing one cryptic line.
+    _log_gate_state(index_key, result, state="scanned", verdict=verdict)
+
+    if not verdict["allowed"]:
+        logger.info(f"⚪ {index_key} no entry @ {now_str}: {verdict['blocking']}")
         return
 
     # Code approved the trade → ask the LLM ONLY as a final veto (advisory).
@@ -201,6 +270,24 @@ def manage_index(STATE: dict, index_key: str, result: dict):
         return
 
     handle_enter(STATE, index_key, result)
+
+
+def _log_gate_state(index_key: str, result: dict, state: str,
+                    verdict: dict = None, blocking: str = None):
+    """
+    Persist why this index did or did not trade on this pass.
+
+    Recording it for every state — scanned, holding, entered — means the
+    dashboard always has an answer, instead of only when the gate ran.
+    """
+    if verdict is None:
+        verdict = {"allowed": False, "blocking": blocking, "checks": []}
+    try:
+        log_gate(index_key, verdict,
+                 confluence=result.get("confluence"),
+                 spot=result.get("spot_ltp"), state=state)
+    except Exception as e:
+        logger.warning(f"⚠️ Could not record gate verdict for {index_key}: {e}")
 
 
 def _llm_approves_entry(STATE: dict, index_key: str, result: dict) -> bool:
@@ -224,13 +311,17 @@ def _llm_approves_entry(STATE: dict, index_key: str, result: dict) -> bool:
         )
     except Exception as e:
         logger.warning(f"⚠️ {index_key} LLM veto unavailable ({e}) — proceeding on code gate.")
+        RUNTIME.health.set(llm_ok=False)
         return True
 
+    RUNTIME.health.set(llm_ok=True,
+                       llm_last_at=datetime.now().isoformat(timespec="seconds"))
     result["decision"] = decision   # let select_strategy honour its suggestion
     if decision.get("action") == "SKIP":
-        reason = decision.get("reasoning", "")[:120]
+        reason = decision.get("reasoning", "")[:200]
         logger.info(f"🛑 {index_key} LLM vetoed entry: {reason}")
-        send_alert(f"🛑 {index_key} LLM Veto", reason, emoji="🛑")
+        events.warning("gate.llm_veto", f"AI second opinion said no to {index_key}",
+                       reason, index=index_key)
         return False
     return True
 
@@ -259,10 +350,12 @@ def handle_enter(STATE: dict, index_key: str, result: dict):
         logger.warning(f"⚠️ {index_key} entry skipped — no ATM premium available.")
         return
 
-    approval = rm.approve_trade(pt.capital, ref_price, lot_size)
+    approval = rm.approve_trade(pt.capital, ref_price, lot_size,
+                                open_count=pt.open_count())
     if not approval["approved"]:
         logger.warning(f"🚫 {index_key} entry blocked: {approval['reason']}")
-        send_alert(f"🚫 {index_key} Trade Blocked", approval["reason"], emoji="🚫")
+        events.warning("trade.blocked", f"{index_key} trade blocked",
+                       approval["reason"], index=index_key)
         return
 
     lots     = approval["lots"]
@@ -277,8 +370,9 @@ def handle_enter(STATE: dict, index_key: str, result: dict):
     )
     if lots < 1:
         logger.warning(f"🚫 {index_key} entry blocked: margin exceeds allocation.")
-        send_alert(f"🚫 {index_key} Trade Blocked",
-            "Required margin exceeds capital allocation.", emoji="🚫")
+        events.warning("trade.blocked", f"{index_key} trade blocked",
+            "The broker margin for this trade is more than the per-trade limit "
+            "allows, even at one lot.", index=index_key)
         return
 
     position = strategies.build_position(
@@ -287,8 +381,9 @@ def handle_enter(STATE: dict, index_key: str, result: dict):
         lot_size=lot_size, expiry=result["expiry"], greeks=greeks,
     )
     if not position:
-        send_alert(f"⚠️ {index_key} Build Failed",
-            f"Could not price legs for {strategy}.", emoji="⚠️")
+        events.warning("trade.blocked", f"{index_key} trade blocked",
+            f"Could not price a tradable {strategy.replace('_', ' ')} — the "
+            f"strikes were illiquid or the premium was too thin.", index=index_key)
         return
 
     trade = pt.enter(position)
@@ -311,18 +406,25 @@ def handle_enter(STATE: dict, index_key: str, result: dict):
         f"  {l['action']} {l['option_type']} {int(l['strike'])} @ ₹{l['entry_ltp']}"
         for l in position["legs"]
     )
-    send_message(
-        f"🟢 <b>PAPER TRADE — ENTRY [{index_key}]</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"Strategy  : {strategy}\n"
+    events.success(
+        "trade.enter", f"Opened a {strategy.replace('_', ' ')} on {index_key}",
         f"Lots      : {lots} × {lot_size}\n"
         f"Legs:\n{legs_txt}\n"
         f"Net Prem  : ₹{position['net_credit']} ({position['direction']})\n"
         f"Stop Loss : ₹{position['stop_loss_pnl']} P&L\n"
         f"Target    : ₹{position['target_pnl']} P&L\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"📝 {decision.get('reasoning', '')[:160]}"
+        f"📝 {decision.get('reasoning', '')[:200]}",
+        index=index_key,
+        meta={"strategy": strategy, "lots": lots, "lot_size": lot_size,
+              "net_credit": position["net_credit"],
+              "stop_loss_pnl": position["stop_loss_pnl"],
+              "target_pnl": position["target_pnl"],
+              "legs": [{"action": l["action"], "type": l["option_type"],
+                        "strike": l["strike"], "entry": l["entry_ltp"]}
+                       for l in position["legs"]]},
     )
+    _log_gate_state(index_key, result, state="entered",
+                    verdict={"allowed": True, "blocking": None, "checks": []})
     logger.info(f"🟢 {index_key} entered {strategy} lots={lots}")
 
 
@@ -343,32 +445,36 @@ def handle_exit(STATE: dict, index_key: str, reason: str, df_oi=None):
     total_pnl = trade["pnl"]
     rm.close_position(f"{index_key}{int(position['legs'][0]['strike'])}", total_pnl)
 
-    emoji = "🟢" if total_pnl >= 0 else "🔴"
-    send_message(
-        f"{emoji} <b>PAPER TRADE — EXIT [{index_key}]</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"Strategy  : {trade['strategy']}\n"
+    won = total_pnl >= 0
+    emit = events.success if won else events.warning
+    emit(
+        "trade.exit",
+        f"Closed the {trade['strategy'].replace('_', ' ')} on {index_key} "
+        f"{'for a profit' if won else 'at a loss'}",
         f"Entry     : ₹{trade['entry_combined']}\n"
         f"Exit      : ₹{trade['exit_combined']}\n"
         f"P&L       : ₹{total_pnl}\n"
         f"Day Total : ₹{rm.daily_pnl.total_pnl}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"📝 {reason}"
+        f"Account   : ₹{pt.capital:,.0f}\n"
+        f"📝 {reason}",
+        index=index_key,
+        meta={"strategy": trade["strategy"], "pnl": total_pnl, "reason": reason,
+              "entry": trade["entry_combined"], "exit": trade["exit_combined"],
+              "capital": round(pt.capital, 2)},
     )
-    send_message(pt.get_stats_message())
+    RUNTIME.series.drop(f"pnl:{index_key}")
     logger.info(f"🔴 {index_key} exit: P&L=₹{total_pnl}")
 
 
 def handle_adjust(STATE: dict, index_key: str, decision: dict):
     pt  = STATE["paper_trader"]
     pos = pt.get_position(index_key)
-    send_message(
-        f"🟡 <b>ADJUST [{index_key}]</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"Current : {pos.get('strategy')}\n"
-        f"Action  : {decision.get('strategy')}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"📝 {decision.get('reasoning')}"
+    events.info(
+        "position.adjust", f"Suggestion for the {index_key} position",
+        f"Currently : {pos.get('strategy')}\n"
+        f"Suggested : {decision.get('strategy')}\n"
+        f"📝 {decision.get('reasoning')}",
+        index=index_key,
     )
     logger.info(f"🟡 {index_key} adjust: {decision.get('strategy')}")
 
@@ -390,9 +496,12 @@ def start_monitor(STATE: dict):
                 logger.info(f"💤 Market closed @ {now} — monitor sleeping.")
         except Exception as e:
             logger.error(f"❌ Monitor cycle error: {e}", exc_info=True)
+            RUNTIME.health.note_error(e, where="monitor.cycle")
             try:
-                send_alert("❌ Monitor Error", str(e), emoji="❌")
+                events.error("monitor.failed", "The market check failed", str(e)[:300])
             except Exception:
                 pass
 
-        time.sleep(MONITOR_INTERVAL)
+        # Interruptible wait: a dashboard rescan wakes it straight away.
+        _wake.wait(MONITOR_INTERVAL)
+        _wake.clear()

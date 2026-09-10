@@ -1,0 +1,1454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#05080D">
+<title>Theta Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  --ground:#05080D;
+  --ink:#EDF4F8; --ink-2:#9EB3C2; --ink-3:#68808F;
+  --accent:#3EE9FF; --accent-2:#39F5C4; --accent-ink:#03131A;
+  --good:#35E39A; --bad:#FF5C7A; --warn:#FFB84D;
+  --line:rgba(255,255,255,.085);
+  --line-2:rgba(255,255,255,.16);
+  --fill:rgba(255,255,255,.045);
+  --fill-2:rgba(255,255,255,.075);
+  --glow:0 0 0 1px rgba(62,233,255,.22), 0 0 34px rgba(62,233,255,.13);
+  --display:"Bricolage Grotesque","Manrope",ui-sans-serif,system-ui,sans-serif;
+  --sans:"Manrope",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{
+  font-family:var(--sans);font-size:15px;line-height:1.5;color:var(--ink);
+  -webkit-font-smoothing:antialiased;padding-bottom:82px;
+  background:
+    linear-gradient(rgba(255,255,255,.02) 1px,transparent 1px) 0 0/100% 46px,
+    linear-gradient(90deg,rgba(255,255,255,.02) 1px,transparent 1px) 0 0/46px 100%,
+    radial-gradient(920px 620px at 10% -8%,rgba(62,233,255,.17),transparent 62%),
+    radial-gradient(780px 540px at 92% 4%,rgba(57,245,196,.12),transparent 64%),
+    radial-gradient(820px 700px at 50% 108%,rgba(40,132,214,.13),transparent 62%),
+    var(--ground);
+  background-attachment:fixed;
+}
+@media (min-width:960px){body{padding-bottom:0}}
+h1,h2,h3{font-family:var(--display);margin:0;letter-spacing:-.02em;text-wrap:balance;font-weight:700}
+p{margin:0}
+button{font:inherit;color:inherit;cursor:pointer;font-family:var(--sans)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:8px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+.glass{background:linear-gradient(180deg,rgba(255,255,255,.058),rgba(255,255,255,.02));
+  border:1px solid var(--line);border-radius:16px;
+  backdrop-filter:blur(20px) saturate(150%);-webkit-backdrop-filter:blur(20px) saturate(150%)}
+.grad{background:linear-gradient(96deg,var(--accent),var(--accent-2));
+  -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent}
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:.94em}
+.pos{color:var(--good)}
+.neg{color:var(--bad)}
+.label{font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.hint{font-size:13.5px;color:var(--ink-2);line-height:1.5}
+.micro{font-size:12px;color:var(--ink-3)}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+.dot.live{box-shadow:0 0 0 0 currentColor;animation:pulse 2.6s ease-out infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(53,227,154,.55)}70%{box-shadow:0 0 0 7px rgba(53,227,154,0)}100%{box-shadow:0 0 0 0 rgba(53,227,154,0)}}
+
+/* ── chrome ───────────────────────────── */
+.topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;
+  padding:11px 16px;border-bottom:1px solid var(--line);
+  background:rgba(5,8,13,.72);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);flex-wrap:wrap}
+.brand{font-family:var(--display);font-weight:800;font-size:17px;letter-spacing:-.035em}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;
+  padding:4px 10px;border-radius:999px;border:1px solid var(--line-2);color:var(--ink-2);white-space:nowrap;
+  letter-spacing:.02em}
+.chip.on{color:var(--good);border-color:rgba(53,227,154,.4);background:rgba(53,227,154,.1)}
+.chip.off{color:var(--bad);border-color:rgba(255,92,122,.42);background:rgba(255,92,122,.1)}
+.chip.cy{color:var(--accent);border-color:rgba(62,233,255,.38);background:rgba(62,233,255,.1)}
+.chip.am{color:var(--warn);border-color:rgba(255,184,77,.38);background:rgba(255,184,77,.1)}
+.spacer{margin-left:auto}
+
+.notice{padding:7px 16px;font-size:12px;font-weight:600;color:var(--warn);text-align:center;
+  background:rgba(255,184,77,.09);border-bottom:1px solid rgba(255,184,77,.2)}
+
+.shell{display:block}
+main{padding:18px 14px 30px;max-width:1180px;margin:0 auto}
+nav{position:fixed;bottom:0;left:0;right:0;z-index:30;display:flex;padding:7px 6px 10px;
+  border-top:1px solid var(--line);background:rgba(5,8,13,.86);
+  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+nav button{flex:1;background:none;border:0;padding:8px 2px;display:flex;flex-direction:column;
+  align-items:center;gap:5px;font-size:11px;font-weight:700;color:var(--ink-3);border-radius:10px}
+nav button[aria-selected="true"]{color:var(--accent)}
+.nb{width:22px;height:3px;border-radius:99px;background:transparent}
+nav button[aria-selected="true"] .nb{background:linear-gradient(90deg,var(--accent),var(--accent-2));
+  box-shadow:0 0 12px rgba(62,233,255,.7)}
+.long{display:none}
+@media (min-width:960px){
+  .shell{display:grid;grid-template-columns:214px minmax(0,1fr);max-width:1320px;margin:0 auto;align-items:start}
+  nav{position:sticky;top:60px;bottom:auto;flex-direction:column;gap:3px;padding:22px 14px;
+    background:none;border-top:0;backdrop-filter:none;-webkit-backdrop-filter:none}
+  nav button{flex:none;flex-direction:row;justify-content:flex-start;gap:11px;width:100%;
+    padding:9px 12px;font-size:14px;text-align:left;letter-spacing:-.01em}
+  nav button[aria-selected="true"]{background:rgba(62,233,255,.09);
+    box-shadow:inset 0 0 0 1px rgba(62,233,255,.22)}
+  .nb{width:3px;height:17px}
+  .short{display:none}
+  .long{display:inline}
+  main{padding:22px 22px 60px}
+}
+
+/* ── layout blocks ────────────────────── */
+.stack{display:flex;flex-direction:column;gap:16px}
+.pad{padding:18px}
+.hd{padding:15px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.hd h2{font-size:15.5px}
+.sec{font-family:var(--display);font-size:11.5px;font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-3);margin:6px 0 -6px}
+@media (min-width:1040px){
+  .cols{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(310px,1fr);gap:16px;align-items:start}
+  .cols>.stack{gap:16px}
+}
+
+/* ── hero ─────────────────────────────── */
+.hero{position:relative;overflow:hidden;box-shadow:var(--glow)}
+.hero::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(560px 200px at 88% 0%,rgba(57,245,196,.16),transparent 70%)}
+.hero-in{position:relative;z-index:1;padding:22px 20px;display:grid;gap:20px}
+@media (min-width:760px){.hero-in{grid-template-columns:1fr auto;align-items:center;padding:26px 24px}}
+.hero h1{font-size:26px;line-height:1.18;letter-spacing:-.035em;max-width:20ch}
+@media (min-width:760px){.hero h1{font-size:32px}}
+.hero .money{text-align:left}
+@media (min-width:760px){.hero .money{text-align:right}}
+.hero .big{font-family:var(--display);font-weight:800;font-size:38px;letter-spacing:-.04em;
+  font-variant-numeric:tabular-nums;line-height:1}
+@media (min-width:760px){.hero .big{font-size:44px}}
+
+.tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media (min-width:560px){.tiles{grid-template-columns:repeat(4,1fr)}}
+.tile{padding:13px 14px;border-radius:13px;background:var(--fill);border:1px solid var(--line);
+  display:flex;flex-direction:column;gap:5px}
+.tile .v{font-family:var(--display);font-weight:700;font-size:19px;letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;line-height:1.15}
+
+/* ── range band ───────────────────────── */
+.band{position:relative;height:90px;margin:8px 0 4px}
+.band .rail{position:absolute;left:0;right:0;top:48px;height:13px;border-radius:99px;
+  background:rgba(255,92,122,.16);border:1px solid var(--line);overflow:hidden}
+.band .be{position:absolute;top:0;bottom:0;background:rgba(53,227,154,.16)}
+.band .core{position:absolute;top:0;bottom:0;background:linear-gradient(90deg,rgba(53,227,154,.42),rgba(57,245,196,.42))}
+.band .tick{position:absolute;top:42px;height:25px;width:1px;background:var(--line-2)}
+.band .spot{position:absolute;top:43px;width:3px;height:29px;border-radius:99px;
+  background:var(--accent);box-shadow:0 0 14px rgba(62,233,255,.9)}
+.band .spotlab{position:absolute;top:0;transform:translateX(-50%);white-space:nowrap;text-align:center}
+.band .edge{position:absolute;top:70px;transform:translateX(-50%);white-space:nowrap;font-size:11.5px;
+  color:var(--ink-3);font-family:var(--mono)}
+.bandkey{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--ink-3);margin-top:12px}
+.bandkey i{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:6px;vertical-align:-1px}
+
+/* ── pnl meter ────────────────────────── */
+.pnl{position:relative;height:60px;margin:4px 0 2px}
+.pnl .track{position:absolute;left:0;right:0;top:36px;height:11px;border-radius:99px;border:1px solid var(--line);
+  background:linear-gradient(90deg,rgba(255,92,122,.34) 0%,rgba(255,255,255,.06) 44.4%,rgba(53,227,154,.34) 100%)}
+.pnl .zero{position:absolute;top:30px;height:23px;width:1px;background:var(--line-2)}
+.pnl .now{position:absolute;top:29px;width:3px;height:25px;border-radius:99px;background:var(--good);
+  box-shadow:0 0 14px rgba(53,227,154,.85)}
+.pnl .lab{position:absolute;top:0;transform:translateX(-50%);white-space:nowrap;text-align:center}
+.pnl .lab b{font-family:var(--display);font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+.ends{display:flex;justify-content:space-between;font-size:12.5px}
+.ends b{font-family:var(--mono);font-size:13.5px}
+
+/* ── legs ─────────────────────────────── */
+.legs{display:grid;gap:9px;margin-top:8px}
+@media (min-width:560px){.legs{grid-template-columns:1fr 1fr}}
+.leg{padding:12px 13px;border-radius:12px;background:var(--fill);border:1px solid var(--line);
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.tag{font-size:10px;font-weight:700;letter-spacing:.1em;padding:3px 8px;border-radius:6px;text-transform:uppercase}
+.tag.s{background:rgba(255,92,122,.16);color:var(--bad)}
+.tag.b{background:rgba(62,233,255,.15);color:var(--accent)}
+.leg .r{margin-left:auto;text-align:right;font-family:var(--mono);font-size:13.5px}
+
+/* ── verdict + checks ─────────────────── */
+.verdict{padding:20px;border-radius:16px;border:1px solid rgba(255,92,122,.32);
+  background:linear-gradient(180deg,rgba(255,92,122,.12),rgba(255,92,122,.03))}
+.verdict h2{font-size:21px;letter-spacing:-.03em}
+.reasons{display:grid;gap:10px;margin-top:15px}
+.reason{display:grid;grid-template-columns:26px 1fr;gap:12px;padding:13px 14px;border-radius:12px;
+  background:rgba(5,8,13,.42);border:1px solid var(--line)}
+.reason b{display:block;font-size:14.5px;font-weight:700;margin-bottom:2px}
+.mk{width:24px;height:24px;border-radius:8px;display:grid;place-items:center;font-size:13px;font-weight:700}
+.mk.no{background:var(--bad);color:#12060A}
+.mk.ok{background:rgba(53,227,154,.18);color:var(--good)}
+.mk.na{background:var(--fill-2);color:var(--ink-3)}
+.passed{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;
+  overflow:hidden;margin-top:12px}
+.passed .row{background:rgba(5,8,13,.5);padding:11px 13px;display:grid;grid-template-columns:26px 1fr;
+  gap:12px;align-items:center}
+.passed .row b{font-size:13.5px;font-weight:600}
+.idxpick{display:flex;gap:8px;flex-wrap:wrap}
+.idxpick button{padding:9px 14px;border-radius:11px;border:1px solid var(--line);background:var(--fill);
+  font-size:13.5px;font-weight:700;color:var(--ink-2);display:inline-flex;align-items:center;gap:8px}
+.idxpick button[aria-pressed="true"]{color:var(--accent);border-color:rgba(62,233,255,.4);
+  background:rgba(62,233,255,.1);box-shadow:0 0 20px rgba(62,233,255,.14)}
+
+/* ── tables ───────────────────────────── */
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:480px}
+th{text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ink-3);padding:0 12px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:11px 12px;border-bottom:1px solid rgba(255,255,255,.05)}
+tbody tr:last-child td{border-bottom:0}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+tfoot td{font-weight:700;border-top:1px solid var(--line-2);border-bottom:0}
+.pts{display:inline-block;min-width:32px;text-align:center;font-weight:700;font-size:12px;padding:2px 7px;
+  border-radius:7px;background:var(--fill-2);color:var(--ink-3);font-family:var(--mono)}
+.pts.on{background:rgba(62,233,255,.16);color:var(--accent)}
+.stripe{border-left:3px solid transparent}
+.stripe.w{border-left-color:var(--good)}
+.stripe.l{border-left-color:var(--bad)}
+
+/* ── buttons ──────────────────────────── */
+.btn{border:1px solid var(--line-2);background:var(--fill);border-radius:11px;padding:11px 16px;
+  font-size:14px;font-weight:700;color:var(--ink);transition:border-color .15s,background .15s}
+.btn:hover{border-color:var(--accent);background:rgba(62,233,255,.08)}
+.btn.pri{background:linear-gradient(96deg,var(--accent),var(--accent-2));border-color:transparent;
+  color:var(--accent-ink);box-shadow:0 0 26px rgba(62,233,255,.3)}
+.btn.pri:hover{filter:brightness(1.07)}
+.btn.dan{background:rgba(255,92,122,.14);border-color:rgba(255,92,122,.45);color:var(--bad)}
+.btn.dan:hover{background:rgba(255,92,122,.24);border-color:var(--bad)}
+.btn.sm{padding:8px 13px;font-size:13px}
+.btnrow{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.confirm{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:14px;border-radius:12px;
+  background:rgba(255,92,122,.09);border:1px solid rgba(255,92,122,.32);margin-top:12px}
+
+/* ── lists ────────────────────────────── */
+.rows{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:13px;overflow:hidden}
+.rows>div{background:rgba(5,8,13,.5);padding:13px 14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.rows .who{font-weight:700;font-size:13.5px;min-width:142px}
+.state{margin-left:auto;display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;white-space:nowrap}
+.state.ok{color:var(--good)} .state.wn{color:var(--warn)}
+
+.tl{display:grid;gap:0;position:relative}
+.tl .it{display:grid;grid-template-columns:52px 1fr;gap:12px;padding:9px 0;position:relative}
+.tl .it::before{content:"";position:absolute;left:60px;top:0;bottom:0;width:1px;background:var(--line)}
+.tl .it:first-child::before{top:16px}
+.tl .it:last-child::before{bottom:calc(100% - 16px)}
+.tl .t{font-family:var(--mono);font-size:12px;color:var(--ink-3);padding-top:1px;text-align:right}
+.tl .b{padding-left:16px;position:relative;font-size:13.5px}
+.tl .b::before{content:"";position:absolute;left:-4.5px;top:6px;width:9px;height:9px;border-radius:50%;
+  background:var(--ground);border:2px solid var(--line-2)}
+.tl .it.hi .b::before{border-color:var(--accent);box-shadow:0 0 12px rgba(62,233,255,.8)}
+.tl .it.next .b::before{border-color:var(--warn)}
+
+/* ── chart ────────────────────────────── */
+.chartwrap{position:relative}
+.tip{position:absolute;pointer-events:none;z-index:5;padding:8px 11px;border-radius:10px;
+  background:rgba(5,8,13,.94);border:1px solid var(--line-2);font-size:12.5px;white-space:nowrap;
+  transform:translate(-50%,-125%);box-shadow:0 8px 26px rgba(0,0,0,.55)}
+.tip b{font-family:var(--mono);font-size:13.5px;display:block;margin-top:1px}
+
+/* ── settings ─────────────────────────── */
+.fields{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:13px;overflow:hidden}
+.fld{background:rgba(5,8,13,.5);padding:15px;display:grid;gap:5px}
+@media (min-width:720px){.fld{grid-template-columns:1fr 200px;align-items:center;column-gap:22px;row-gap:3px}
+  .fld .hint{grid-column:1}.fld .ctl{grid-column:2;grid-row:1 / span 2;justify-self:end}}
+.fld label{font-weight:700;font-size:14px}
+input[type=text],select{font:inherit;font-family:var(--mono);font-size:13.5px;padding:9px 11px;
+  border:1px solid var(--line-2);border-radius:10px;background:rgba(255,255,255,.05);color:var(--ink);
+  width:100%;max-width:200px}
+select{font-family:var(--sans)}
+.tg{display:inline-flex;border:1px solid var(--line-2);border-radius:10px;overflow:hidden}
+.tg button{border:0;background:transparent;padding:8px 15px;font-size:13px;font-weight:700;color:var(--ink-3)}
+.tg button[aria-pressed="true"]{background:linear-gradient(96deg,var(--accent),var(--accent-2));color:var(--accent-ink)}
+
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:96px;z-index:50;
+  padding:12px 17px;border-radius:12px;font-size:13.5px;max-width:min(440px,92vw);
+  background:rgba(5,8,13,.95);border:1px solid rgba(62,233,255,.35);color:var(--ink);
+  box-shadow:0 0 40px rgba(62,233,255,.2)}
+@media (min-width:960px){.toast{bottom:26px}}
+.alert{display:flex;gap:12px;align-items:flex-start;padding:15px 17px;border-radius:14px;
+  background:rgba(255,92,122,.11);border:1px solid rgba(255,92,122,.36);font-size:14px}
+.kv{display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.055);font-size:13.5px}
+.kv:last-child{border-bottom:0}
+.kv b{font-weight:700;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:13px}
+summary{cursor:pointer;font-size:13px;font-weight:700;color:var(--accent);list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"▸ ";font-size:11px}
+details[open] summary::before{content:"▾ "}
+[hidden]{display:none!important}
+</style>
+<style>
+/* ── states the mockup never had to show ── */
+.empty{padding:26px 18px;text-align:center;color:var(--ink-3);font-size:13.5px}
+.chartbox{position:relative;min-height:150px}
+.skel{border-radius:12px;background:linear-gradient(90deg,var(--fill),var(--fill-2),var(--fill));
+  background-size:200% 100%;animation:sheen 1.4s linear infinite;height:14px}
+@keyframes sheen{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.notice.bad{color:var(--bad);background:rgba(255,92,122,.1);border-bottom-color:rgba(255,92,122,.3)}
+.notice.warnbar{color:var(--warn);background:rgba(255,184,77,.09);border-bottom-color:rgba(255,184,77,.22)}
+.gridcards{display:grid;gap:12px}
+@media (min-width:700px){.gridcards.two{grid-template-columns:1fr 1fr}}
+.err{color:var(--bad);font-size:13px;margin-top:10px}
+.saved{color:var(--good);font-size:13px;margin-top:10px}
+.pillrow{display:flex;gap:8px;flex-wrap:wrap}
+.pillrow button{padding:8px 13px;border-radius:10px;border:1px solid var(--line);
+  background:var(--fill);font-size:13px;font-weight:700;color:var(--ink-3)}
+.pillrow button[aria-pressed="true"]{color:var(--accent);border-color:rgba(62,233,255,.4);
+  background:rgba(62,233,255,.1)}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.btn[disabled]:hover{border-color:var(--line-2);background:var(--fill)}
+textarea{font:inherit;font-family:var(--mono);font-size:13px;padding:9px 11px;border-radius:10px;
+  background:rgba(255,255,255,.05);border:1px solid var(--line-2);color:var(--ink);
+  width:100%;max-width:200px;min-height:64px;resize:vertical}
+.idxbox{display:flex;flex-direction:column;gap:7px;align-items:flex-end}
+.idxbox label{display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;
+  color:var(--ink-2);cursor:pointer}
+.idxbox input{width:auto;accent-color:#3EE9FF}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute;left:-9999px">
+  <defs>
+    <linearGradient id="ag" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3EE9FF" stop-opacity=".32"></stop>
+      <stop offset="100%" stop-color="#3EE9FF" stop-opacity="0"></stop>
+    </linearGradient>
+    <linearGradient id="lg" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3EE9FF"></stop>
+      <stop offset="100%" stop-color="#39F5C4"></stop>
+    </linearGradient>
+  </defs>
+</svg>
+
+<header class="topbar">
+  <span class="brand grad">Theta Desk</span>
+  <span class="chip cy" id="modechip">Paper money</span>
+  <span class="spacer"></span>
+  <span class="chip" id="runchip"><i class="dot"></i>Connecting</span>
+  <span class="micro mono" id="clock">--:--</span>
+</header>
+
+<p class="notice bad" id="banner" hidden></p>
+
+<div class="shell">
+  <nav role="tablist" aria-label="Sections">
+    <button role="tab" id="tab-today" aria-controls="p-today" aria-selected="true"><i class="nb"></i>Today</button>
+    <button role="tab" id="tab-why" aria-controls="p-why" aria-selected="false"><i class="nb"></i><span class="short">Why</span><span class="long">Why no trade</span></button>
+    <button role="tab" id="tab-trades" aria-controls="p-trades" aria-selected="false"><i class="nb"></i>Trades</button>
+    <button role="tab" id="tab-health" aria-controls="p-health" aria-selected="false"><i class="nb"></i>Health</button>
+    <button role="tab" id="tab-settings" aria-controls="p-settings" aria-selected="false"><i class="nb"></i>Settings</button>
+  </nav>
+  <main>
+    <section id="p-today" role="tabpanel" aria-labelledby="tab-today" class="stack"></section>
+    <section id="p-why" role="tabpanel" aria-labelledby="tab-why" class="stack" hidden></section>
+    <section id="p-trades" role="tabpanel" aria-labelledby="tab-trades" class="stack" hidden></section>
+    <section id="p-health" role="tabpanel" aria-labelledby="tab-health" class="stack" hidden></section>
+    <section id="p-settings" role="tabpanel" aria-labelledby="tab-settings" class="stack" hidden></section>
+  </main>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ── tiny helpers ───────────────────────────────────────────────
+  var $ = function (id) { return document.getElementById(id); };
+  var NS = 'http://www.w3.org/2000/svg';
+
+  function esc(v) {
+    return String(v == null ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+  function num(n, places) {
+    if (n == null || isNaN(n)) return '—';
+    return Number(n).toLocaleString('en-IN', {
+      minimumFractionDigits: places || 0, maximumFractionDigits: places || 0 });
+  }
+  function inr(n) { return n == null || isNaN(n) ? '—' : '₹' + num(Math.abs(n)); }
+  function inrSigned(n) {
+    if (n == null || isNaN(n)) return '—';
+    return (n > 0 ? '+' : n < 0 ? '−' : '') + inr(n);
+  }
+  function cls(n) { return n == null ? '' : n > 0 ? 'pos' : n < 0 ? 'neg' : ''; }
+  function hhmm(iso) { return iso ? String(iso).slice(11, 16) : '—'; }
+  function marketTime(ts, tzMin) {
+    var d = new Date((ts + (tzMin || 0) * 60) * 1000);
+    return String(d.getUTCHours()).padStart(2, '0') + ':' +
+           String(d.getUTCMinutes()).padStart(2, '0');
+  }
+  var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function shortDate(iso) {
+    var p = String(iso || '').split('-');
+    if (p.length !== 3) return String(iso || '');
+    return parseInt(p[2], 10) + ' ' + (MONTHS[parseInt(p[1], 10) - 1] || '');
+  }
+  function titleCase(s) {
+    return String(s || '').replace(/_/g, ' ').replace(/^./, function (c) { return c.toUpperCase(); });
+  }
+
+  var APP = {
+    state: null, trades: null, settings: null,
+    tab: 'today', whyIndex: null, tradeFilter: 'all',
+    connected: false, dirty: {},
+  };
+
+  // ── api ────────────────────────────────────────────────────────
+  async function api(path, options) {
+    var opts = Object.assign({ headers: { 'content-type': 'application/json' } }, options || {});
+    var res = await fetch(path, opts);
+    if (res.status === 401) { location.href = '/login'; throw new Error('signed out'); }
+    if (!res.ok) {
+      var body = await res.json().catch(function () { return {}; });
+      throw new Error(body.detail || ('Request failed (' + res.status + ')'));
+    }
+    return res.json();
+  }
+
+  var toastTimer;
+  function toast(message) {
+    var el = $('toast');
+    el.textContent = message;
+    el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.hidden = true; }, 5000);
+  }
+
+  // ── charts ─────────────────────────────────────────────────────
+  function svgEl(tag, attrs) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) if (attrs[k] != null) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+  function placeholder(host, text) {
+    host.innerHTML = '<div class="empty">' + esc(text) + '</div>';
+  }
+  function frame(host, aria, height) {
+    host.innerHTML = '';
+    var wrap = document.createElement('div');
+    wrap.className = 'chartwrap';
+    var svg = svgEl('svg', {
+      viewBox: '0 0 760 ' + (height || 230), width: '100%', role: 'img',
+      'aria-label': aria });
+    svg.style.display = 'block';
+    svg.style.touchAction = 'pan-y';
+    var tip = document.createElement('div');
+    tip.className = 'tip'; tip.hidden = true;
+    wrap.appendChild(svg); wrap.appendChild(tip); host.appendChild(wrap);
+    return { svg: svg, wrap: wrap, tip: tip };
+  }
+  function attachHover(svg, wrap, tip, W, marks, paint) {
+    function at(ev) {
+      var r = svg.getBoundingClientRect(), k = W / r.width;
+      var cx = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left) * k;
+      var best = 0, bd = Infinity;
+      marks.forEach(function (m, i) {
+        var d = Math.abs(m.x - cx); if (d < bd) { bd = d; best = i; } });
+      var m = marks[best];
+      if (!m) return;
+      paint(m);
+      tip.hidden = false;
+      tip.innerHTML = '<span style="color:var(--ink-2)">' + esc(m.k) + '</span><b>' +
+                      esc(m.t) + '</b>';
+      tip.style.left = Math.max(52, Math.min(r.width - 52, m.x / k)) + 'px';
+      tip.style.top = (m.y / k) + 'px';
+    }
+    function off() { tip.hidden = true; paint(null); }
+    svg.addEventListener('mousemove', at);
+    svg.addEventListener('mouseleave', off);
+    svg.addEventListener('touchmove', at, { passive: true });
+    svg.addEventListener('touchend', off);
+  }
+
+  /* A single-series line, optionally with horizontal reference lines and
+     shaded bands. Used for the day's profit and the day's index price. */
+  function drawLine(host, series, cfg) {
+    cfg = cfg || {};
+    if (!series || series.length < 2) {
+      return placeholder(host, cfg.empty || 'Not enough data yet today.');
+    }
+    var W = 760, H = 230, L = cfg.left || 74, R = 16, T = 16, B = 32;
+    var pw = W - L - R, ph = H - T - B;
+    var vals = series.map(function (p) { return p[1]; });
+    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+    (cfg.refs || []).forEach(function (r) { lo = Math.min(lo, r.v); hi = Math.max(hi, r.v); });
+    (cfg.zones || []).forEach(function (z) { lo = Math.min(lo, z.from); hi = Math.max(hi, z.to); });
+    if (hi === lo) { hi = lo + 1; lo = lo - 1; }
+    var pad = (hi - lo) * 0.08;
+    lo -= pad; hi += pad;
+
+    var f = frame(host, cfg.aria || 'Chart', H);
+    var step = pw / (series.length - 1);
+    function X(i) { return L + i * step; }
+    function Y(v) { return T + (hi - v) * (ph / (hi - lo)); }
+
+    (cfg.zones || []).forEach(function (z) {
+      f.svg.appendChild(svgEl('rect', { x: L, y: Y(z.to), width: pw,
+        height: Math.max(0, Y(z.from) - Y(z.to)),
+        fill: z.color, 'fill-opacity': z.opacity == null ? 0.12 : z.opacity }));
+    });
+
+    var axisFmt = cfg.axisFmt || cfg.fmt;
+    var ticks = cfg.yTicks || [
+      { v: hi - pad, label: axisFmt(hi - pad) },
+      { v: (hi + lo) / 2, label: axisFmt((hi + lo) / 2) },
+      { v: lo + pad, label: axisFmt(lo + pad) },
+    ];
+    ticks.forEach(function (t) {
+      f.svg.appendChild(svgEl('line', { x1: L, x2: W - R, y1: Y(t.v), y2: Y(t.v),
+        stroke: 'rgba(255,255,255,.07)', 'stroke-width': 1 }));
+      var label = svgEl('text', { x: L - 9, y: Y(t.v) + 3.5, fill: '#68808F',
+        'font-size': 10.5, 'font-family': 'JetBrains Mono, monospace',
+        'text-anchor': 'end' });
+      label.textContent = t.label;
+      f.svg.appendChild(label);
+    });
+
+    (cfg.refs || []).forEach(function (r) {
+      f.svg.appendChild(svgEl('line', { x1: L, x2: W - R, y1: Y(r.v), y2: Y(r.v),
+        stroke: r.color, 'stroke-opacity': 0.5, 'stroke-width': 1,
+        'stroke-dasharray': '4 4' }));
+      var label = svgEl('text', { x: L - 9, y: Y(r.v) + 3.5, fill: '#68808F',
+        'font-size': 10.5, 'font-family': 'JetBrains Mono, monospace',
+        'text-anchor': 'end' });
+      label.textContent = r.label;
+      f.svg.appendChild(label);
+    });
+
+    var pts = series.map(function (p, i) { return X(i).toFixed(1) + ',' + Y(p[1]).toFixed(1); });
+    if (cfg.fill !== false) {
+      var base = cfg.baseline == null ? lo + pad : cfg.baseline;
+      f.svg.appendChild(svgEl('path', { fill: 'url(#ag)', stroke: 'none',
+        d: 'M' + X(0).toFixed(1) + ',' + Y(base).toFixed(1) + ' L' + pts.join(' L') +
+           ' L' + X(series.length - 1).toFixed(1) + ',' + Y(base).toFixed(1) + ' Z' }));
+    }
+    f.svg.appendChild(svgEl('polyline', { fill: 'none', stroke: 'url(#lg)',
+      'stroke-width': 2.4, 'stroke-linejoin': 'round', 'stroke-linecap': 'round',
+      points: pts.join(' '),
+      style: 'filter:drop-shadow(0 0 7px rgba(62,233,255,.5))' }));
+    f.svg.appendChild(svgEl('circle', { cx: X(series.length - 1),
+      cy: Y(series[series.length - 1][1]), r: 4.5, fill: '#39F5C4',
+      stroke: '#05080D', 'stroke-width': 2,
+      style: 'filter:drop-shadow(0 0 8px rgba(57,245,196,.9))' }));
+
+    [[0, 'start'], [Math.floor((series.length - 1) / 2), 'middle'],
+     [series.length - 1, 'end']].forEach(function (a) {
+      var t = svgEl('text', { x: X(a[0]), y: H - 10, fill: '#68808F', 'font-size': 10.5,
+        'font-family': 'JetBrains Mono, monospace', 'text-anchor': a[1] });
+      t.textContent = cfg.labels ? cfg.labels[a[0]] : marketTime(series[a[0]][0], cfg.tz);
+      f.svg.appendChild(t);
+    });
+
+    var cross = svgEl('line', { y1: T, y2: T + ph, stroke: 'rgba(62,233,255,.45)',
+      'stroke-width': 1, style: 'display:none' });
+    var dot = svgEl('circle', { r: 5, fill: '#05080D', stroke: '#3EE9FF',
+      'stroke-width': 2.4, style: 'display:none' });
+    f.svg.appendChild(cross); f.svg.appendChild(dot);
+    attachHover(f.svg, f.wrap, f.tip, W, series.map(function (p, i) {
+      return { x: X(i), y: Y(p[1]),
+               k: cfg.labels ? cfg.labels[i] : marketTime(p[0], cfg.tz),
+               t: cfg.fmt(p[1]) };
+    }), function (m) {
+      if (!m) { cross.style.display = 'none'; dot.style.display = 'none'; return; }
+      cross.setAttribute('x1', m.x); cross.setAttribute('x2', m.x); cross.style.display = '';
+      dot.setAttribute('cx', m.x); dot.setAttribute('cy', m.y); dot.style.display = '';
+    });
+  }
+
+  /* Green/red bars for realised profit per day. A flat day gets a grey stub so
+     "no trade" reads differently from "missing". */
+  function drawBars(host, rows, cfg) {
+    cfg = cfg || {};
+    if (!rows || !rows.length) return placeholder(host, cfg.empty || 'No closed trades yet.');
+    var W = 300, H = 150, L = 54, R = 8, T = 10, B = 26;
+    var pw = W - L - R, ph = H - T - B;
+    var vals = rows.map(function (r) { return r.pnl || 0; });
+    var top = Math.max.apply(null, vals.concat([0]));
+    var bot = Math.min.apply(null, vals.concat([0]));
+    var reach = Math.max(Math.abs(top), Math.abs(bot), 1) * 1.15;
+    var hi = reach, lo = -reach;
+
+    host.innerHTML = '';
+    var wrap = document.createElement('div');
+    wrap.className = 'chartwrap';
+    var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, width: '100%', role: 'img',
+      'aria-label': cfg.aria || 'Profit per day' });
+    svg.style.display = 'block';
+    var tip = document.createElement('div');
+    tip.className = 'tip'; tip.hidden = true;
+    wrap.appendChild(svg); wrap.appendChild(tip); host.appendChild(wrap);
+
+    function Y(v) { return T + (hi - v) * (ph / (hi - lo)); }
+    var slot = pw / rows.length, bw = Math.min(14, slot * 0.6), zero = Y(0);
+
+    [hi * 0.8, 0, lo * 0.8].forEach(function (v) {
+      svg.appendChild(svgEl('line', { x1: L, x2: W - R, y1: Y(v), y2: Y(v),
+        stroke: v === 0 ? 'rgba(255,255,255,.18)' : 'rgba(255,255,255,.07)',
+        'stroke-width': 1 }));
+      var t = svgEl('text', { x: L - 6, y: Y(v) + 3, fill: '#68808F', 'font-size': 9.5,
+        'font-family': 'JetBrains Mono, monospace', 'text-anchor': 'end' });
+      t.textContent = v === 0 ? '₹0' : inrSigned(v);
+      svg.appendChild(t);
+    });
+
+    var marks = [];
+    rows.forEach(function (row, i) {
+      var value = row.pnl || 0;
+      var x = L + i * slot + (slot - bw) / 2, rect;
+      if (!value) {
+        rect = svgEl('rect', { x: x, y: zero - 1, width: bw, height: 2, rx: 1,
+          fill: '#68808F', 'fill-opacity': 0.6 });
+      } else {
+        var y = Y(value);
+        rect = svgEl('rect', { x: x, y: Math.min(y, zero), width: bw,
+          height: Math.max(Math.abs(zero - y), 2), rx: 3,
+          fill: value > 0 ? '#35E39A' : '#FF5C7A', 'fill-opacity': 0.85 });
+      }
+      svg.appendChild(rect);
+      marks.push({ el: rect, base: value ? 0.85 : 0.6, x: x + bw / 2,
+        y: value ? Math.min(Y(value), zero) : zero,
+        k: shortDate(row.date), t: value ? inrSigned(value) : 'no trade' });
+    });
+
+    [[0, L, 'start'], [rows.length - 1, W - R, 'end']].forEach(function (a) {
+      var t = svgEl('text', { x: a[1], y: H - 8, fill: '#68808F', 'font-size': 9.5,
+        'font-family': 'JetBrains Mono, monospace', 'text-anchor': a[2] });
+      t.textContent = shortDate(rows[a[0]].date);
+      svg.appendChild(t);
+    });
+
+    attachHover(svg, wrap, tip, W, marks, function (m) {
+      marks.forEach(function (b) {
+        b.el.setAttribute('fill-opacity', !m || b === m ? b.base : 0.3); });
+    });
+  }
+
+  // ── chrome ─────────────────────────────────────────────────────
+  function renderChrome(s) {
+    var chip = $('runchip'), banner = $('banner');
+    $('clock').textContent = (s.market ? s.market.clock : '--:--') + ' IST';
+
+    if (!APP.connected) {
+      chip.className = 'chip'; chip.innerHTML = '<i class="dot"></i>Reconnecting';
+    } else if (s.risk && s.risk.halted) {
+      chip.className = 'chip off'; chip.innerHTML = '<i class="dot"></i>Paused';
+    } else if (!s.ready) {
+      chip.className = 'chip am'; chip.innerHTML = '<i class="dot"></i>Starting up';
+    } else {
+      chip.className = 'chip on'; chip.innerHTML = '<i class="dot live"></i>Running';
+    }
+
+    var problem = null;
+    if (!APP.connected) {
+      problem = 'Lost contact with the bot. Trying to reconnect.';
+    } else if (s.health && s.health.lastError) {
+      problem = 'Something failed at ' + hhmm(s.health.lastError.ts) + ': ' +
+                s.health.lastError.message;
+    }
+    banner.hidden = !problem;
+    banner.textContent = problem || '';
+  }
+
+  // ── today ──────────────────────────────────────────────────────
+  function headline(s) {
+    if (!s.ready) return ['Starting up.', 'Signing in and loading the option chains.'];
+    if (s.risk && s.risk.halted) {
+      return [s.risk.haltIsManual ? 'You paused new trades.' : 'Trading stopped itself.',
+              s.risk.haltReason || 'Nothing new will open until you switch it back on.'];
+    }
+    var open = s.positions || [];
+    if (open.length) {
+      var total = open.reduce(function (a, p) { return a + (p.pnl || 0); }, 0);
+      var word = open.length === 1 ? 'One trade running' : open.length + ' trades running';
+      return [total >= 0 ? 'Nothing needs you.' : 'One to keep an eye on.',
+              word + ', ' + (total >= 0 ? 'and it is ahead.' : 'currently behind.')];
+    }
+    if (s.market && s.market.isOpen) {
+      return ['Watching, nothing worth trading.',
+              'The market is open. Nothing has passed all the checks yet.'];
+    }
+    if (s.market && s.market.phase === 'premarket') {
+      return ['The market has not opened yet.', 'Trading begins at 9:15 this morning.'];
+    }
+    if (s.market && s.market.phase === 'weekend') {
+      return ['Nothing to do this weekend.', 'The bot picks up again on Monday.'];
+    }
+    return ['The market is closed for the day.', 'The bot picks up again tomorrow morning.'];
+  }
+
+  function rangeBand(p) {
+    var r = p.range;
+    if (!r) return '';
+    return '' +
+      '<div>' +
+      '<p class="hint" style="margin-bottom:6px">You keep the money as long as ' +
+        esc(p.index) + ' finishes anywhere in the green. It is ' +
+        (r.inRange ? 'comfortably inside' : r.inProfit ? 'still ahead but near an edge'
+                                                       : 'outside the range') + ' right now.</p>' +
+      '<div class="band">' +
+        '<div class="spotlab" style="left:' + r.spotPct + '%">' +
+          '<span class="label" style="display:block;margin-bottom:2px">' + esc(p.index) + ' now</span>' +
+          '<b class="mono" style="font-size:15px;color:var(--accent)">' + num(r.spot) + '</b>' +
+        '</div>' +
+        '<div class="rail">' +
+          '<div class="be" style="left:' + r.safePct[0] + '%;right:' + (100 - r.safePct[1]) + '%"></div>' +
+          '<div class="core" style="left:' + r.corePct[0] + '%;right:' + (100 - r.corePct[1]) + '%"></div>' +
+        '</div>' +
+        '<div class="tick" style="left:' + r.corePct[0] + '%"></div>' +
+        '<div class="tick" style="left:' + r.corePct[1] + '%"></div>' +
+        '<div class="spot" style="left:' + r.spotPct + '%"></div>' +
+        '<div class="edge" style="left:' + r.corePct[0] + '%">' + num(r.low) + '</div>' +
+        '<div class="edge" style="left:' + r.corePct[1] + '%">' + num(r.high) + '</div>' +
+      '</div>' +
+      '<div class="bandkey">' +
+        '<span><i style="background:linear-gradient(90deg,rgba(53,227,154,.6),rgba(57,245,196,.6))"></i>Keeps everything</span>' +
+        '<span><i style="background:rgba(53,227,154,.22)"></i>Still ahead</span>' +
+        '<span><i style="background:rgba(255,92,122,.24)"></i>Starts losing</span>' +
+      '</div></div>';
+  }
+
+  function positionCard(p) {
+    var legs = p.legs.map(function (l) {
+      return '<div class="leg"><span class="tag ' + (l.action === 'SELL' ? 's' : 'b') + '">' +
+        (l.action === 'SELL' ? 'Sold' : 'Bought') + '</span>' +
+        '<span class="mono">' + num(l.strike) + ' ' + esc(l.type) + '</span>' +
+        '<span class="r"><span class="micro">₹' + num(l.entry, 2) + '</span><br><b>₹' +
+        num(l.now, 2) + '</b></span></div>';
+    }).join('');
+
+    return '<div class="glass">' +
+      '<div class="hd"><h2>' + esc(p.index) + '</h2>' +
+        '<span class="chip">' + esc(p.label) + '</span>' +
+        '<span class="chip ' + (p.winning ? 'on' : 'off') + '"><i class="dot"></i>' +
+          (p.winning ? 'Ahead' : 'Behind') + '</span>' +
+        '<span class="micro spacer">Opened ' + esc((p.entryTime || '').slice(11, 16)) +
+        ' · expires ' + esc(p.expiry || '') + '</span></div>' +
+      '<div class="pad stack" style="gap:22px">' +
+        (p.range ? rangeBand(p) : '<p class="hint">' + esc(p.plain) + '</p>') +
+        '<div>' +
+          '<span class="label">Profit right now, against its two exit points</span>' +
+          '<div class="pnl">' +
+            '<div class="lab" style="left:' + p.meterPct + '%"><span class="label">Now</span>' +
+              '<b class="' + cls(p.pnl) + '">' + inrSigned(p.pnl) + '</b></div>' +
+            '<div class="track"></div>' +
+            '<div class="zero" style="left:' + p.zeroPct + '%"></div>' +
+            '<div class="now" style="left:' + p.meterPct + '%;background:var(--' +
+              (p.winning ? 'good' : 'bad') + ')"></div>' +
+          '</div>' +
+          '<div class="ends">' +
+            '<span><span class="label" style="display:block">Auto-close if it falls to</span>' +
+              '<b class="neg">' + inrSigned(p.stopLossPnl) + '</b></span>' +
+            '<span style="text-align:right"><span class="label" style="display:block">Auto-close if it reaches</span>' +
+              '<b class="pos">' + inrSigned(p.targetPnl) + '</b></span>' +
+          '</div></div>' +
+        '<div><span class="label">The option legs</span>' +
+          '<div class="legs">' + legs + '</div>' +
+          '<p class="micro" style="margin-top:10px">' + p.lots + ' lots of ' + p.lotSize +
+          '. Premium ' + inr(p.premium) + '.</p></div>' +
+        '<div class="btnrow">' +
+          '<button class="btn sm" data-close="' + esc(p.index) + '">Close this trade now</button>' +
+          '<span class="micro">Or leave it. Everything closes automatically by 3:00 pm.</span>' +
+        '</div>' +
+      '</div></div>';
+  }
+
+  function timeline(items) {
+    if (!items.length) return '<div class="empty">Nothing yet.</div>';
+    return '<div class="tl">' + items.map(function (it) {
+      return '<div class="it' + (it.state ? ' ' + it.state : '') + '">' +
+        '<span class="t">' + esc(it.time) + '</span><span class="b">' + esc(it.label) +
+        (it.sub ? '<span class="micro" style="display:block">' + esc(it.sub) + '</span>' : '') +
+        '</span></div>';
+    }).join('') + '</div>';
+  }
+
+  function renderToday(s) {
+    var head = headline(s);
+    var acct = s.account || {}, risk = s.risk || {};
+    var open = s.positions || [];
+    var openPnl = open.reduce(function (a, p) { return a + (p.pnl || 0); }, 0);
+    var nextCheck = (s.schedule || []).filter(function (r) { return r.state === 'next'; })[0];
+
+    var html = '';
+
+    html += '<div class="glass hero"><div class="hero-in">' +
+      '<div><h1><span class="grad">' + esc(head[0]) + '</span><br>' + esc(head[1]) + '</h1>' +
+      '<p class="hint" style="margin-top:11px">' +
+        (s.market.isOpen
+          ? 'Market closes in ' + Math.floor(s.market.closesInMin / 60) + 'h ' +
+            (s.market.closesInMin % 60) + 'm. New trades allowed ' +
+            esc(s.market.entryWindow) + '.'
+          : 'New trades are only opened between ' + esc(s.market.entryWindow) + '.') +
+        (s.health.raw.last_cycle_at
+          ? ' Last checked at ' + hhmm(s.health.raw.last_cycle_at) + '.' : '') +
+      '</p></div>' +
+      '<div class="money"><span class="label">Account value</span>' +
+        '<div class="big num">' + (acct.accountValue == null ? '—' : inr(acct.accountValue)) + '</div>' +
+        '<p class="hint" style="margin-top:7px"><b class="' + cls(acct.totalPnl) + '">' +
+          inrSigned(acct.totalPnl) + '</b> since you started' +
+          (acct.returnsPct == null ? '' : ' · ' + (acct.returnsPct >= 0 ? 'up ' : 'down ') +
+            Math.abs(acct.returnsPct).toFixed(2) + '%') + '</p></div>' +
+      '</div></div>';
+
+    html += '<div class="tiles">' +
+      '<div class="tile"><span class="label">Open trades now</span><span class="v ' + cls(openPnl) +
+        '">' + (open.length ? inrSigned(openPnl) : '—') + '</span>' +
+        '<span class="micro">' + (open.length ? 'Not settled yet' : 'Nothing open') + '</span></div>' +
+      '<div class="tile"><span class="label">Trades open</span><span class="v">' +
+        (risk.openPositions || 0) + ' of ' + (risk.maxOpenPositions || '—') + '</span>' +
+        '<span class="micro">' + Math.max(0, (risk.maxOpenPositions || 0) - (risk.openPositions || 0)) +
+        ' slot(s) free</span></div>' +
+      '<div class="tile"><span class="label">Loss budget left</span><span class="v">' +
+        inr(risk.budgetLeft == null ? 0 : risk.budgetLeft) + '</span><span class="micro">' +
+        (risk.budgetUsed ? inr(risk.budgetUsed) + ' used today' : 'None used today') + '</span></div>' +
+      '<div class="tile"><span class="label">Next check</span><span class="v mono">' +
+        esc(nextCheck ? nextCheck.time : '—') + '</span><span class="micro">Every 5 minutes</span></div>' +
+      '</div>';
+
+    html += '<div class="cols"><div class="stack">';
+
+    html += '<h3 class="sec">' + (open.length ? 'The open trade' : 'No trade open') + '</h3>';
+    html += open.length
+      ? open.map(positionCard).join('')
+      : '<div class="glass pad"><p class="hint">The bot is not in a trade right now. ' +
+        'It checks the market every five minutes and only opens something when all ten ' +
+        'of its checks pass. The <b>Why no trade</b> tab shows exactly which ones did not.</p>' +
+        '<div class="btnrow" style="margin-top:14px">' +
+        '<button class="btn sm" data-goto="tab-why">See why</button></div></div>';
+
+    html += '<h3 class="sec">How today has gone</h3>';
+    if (open.length) {
+      html += '<div class="glass"><div class="hd"><h2>Profit on the open trade</h2>' +
+        '<span class="chip ' + (openPnl >= 0 ? 'on' : 'off') + ' spacer mono">' +
+        inrSigned(openPnl) + '</span></div>' +
+        '<div class="pad"><div id="chart-pnl" class="chartbox"></div>' +
+        '<p class="micro" style="margin-top:11px">The dashed lines are the points where the ' +
+        'bot closes the trade by itself.</p></div></div>';
+    }
+    var watchIndex = open.length ? open[0].index
+      : (s.indices.filter(function (i) { return i.active; })[0] || {}).index;
+    if (watchIndex) {
+      html += '<div class="glass"><div class="hd"><h2>Where ' + esc(watchIndex) +
+        ' has been today</h2><span class="chip cy spacer mono" id="spotnow">—</span></div>' +
+        '<div class="pad"><div id="chart-spot" class="chartbox"></div>' +
+        '<p class="micro" style="margin-top:11px" id="spotnote"></p></div></div>';
+    }
+
+    html += '<h3 class="sec">Control</h3><div class="glass pad">' +
+      '<div class="btnrow">' +
+      (risk.halted
+        ? '<button class="btn pri" id="resumebtn">Start taking trades again</button>' +
+          '<span class="hint" style="flex:1;min-width:230px">' + esc(risk.haltReason || '') + '</span>'
+        : '<button class="btn dan" id="pausebtn">Stop taking new trades</button>' +
+          '<span class="hint" style="flex:1;min-width:230px">Closes nothing you already hold. ' +
+          'It only stops the bot opening anything new, until you switch it back on.</span>') +
+      '</div>' +
+      '<div class="confirm" id="pauseconfirm" hidden>' +
+        '<span class="hint" style="flex:1;min-width:190px"><b>Stop new trades for now?</b></span>' +
+        '<button class="btn dan sm" id="pauseyes">Yes, stop</button>' +
+        '<button class="btn sm" id="pauseno">Cancel</button></div>' +
+      '<div class="btnrow" style="margin-top:14px">' +
+        '<button class="btn sm" id="rescanbtn">Check the market now</button>' +
+        '<span class="micro">Runs the full scan straight away instead of waiting.</span>' +
+      '</div></div>';
+
+    html += '</div><div class="stack">';
+
+    html += '<h3 class="sec">Watching</h3><div class="glass pad" style="padding:14px">' +
+      '<div class="rows" style="border:0;background:transparent;gap:9px">' +
+      s.indices.map(function (i) {
+        var chip = i.hasPosition ? '<span class="chip on"><i class="dot"></i>In a trade</span>'
+          : !i.active ? '<span class="chip">Switched off</span>'
+          : i.gate && i.gate.allowed === false && i.gate.state === 'scanned'
+            ? '<span class="chip off">Not trading</span>'
+            : '<span class="chip">Watching</span>';
+        return '<div style="background:var(--fill);border:1px solid var(--line);border-radius:12px">' +
+          '<span class="who">' + esc(i.index) + '</span>' + chip +
+          '<span class="state mono" style="color:var(--ink-2)">' +
+          (i.spot == null ? '—' : num(i.spot, 2)) + '</span></div>';
+      }).join('') + '</div>' +
+      '<p class="micro" style="margin-top:12px">' +
+      (s.market.isOpen
+        ? 'New trades can open between ' + esc(s.market.entryWindow) + '.'
+        : 'Prices update once the market opens.') + '</p></div>';
+
+    html += '<h3 class="sec">Profit by day</h3><div class="glass pad">' +
+      '<div id="chart-days" class="chartbox" style="min-height:120px"></div>' +
+      '<p class="micro" style="margin-top:10px">A flat day is a day the bot found nothing ' +
+      'worth trading.</p></div>';
+
+    html += '<h3 class="sec">What happens next</h3><div class="glass pad">' +
+      timeline((s.schedule || []).map(function (r) {
+        return { time: r.time, label: r.label,
+                 state: r.state === 'next' ? 'next' : r.state === 'done' ? '' : '' };
+      })) + '</div>';
+
+    html += '<h3 class="sec">Today so far</h3><div class="glass pad">' +
+      timeline((s.activity || []).slice(0, 12).map(function (e) {
+        return { time: (e.time || '').slice(0, 5), label: e.title,
+                 sub: (e.body || '').split('\n')[0].slice(0, 80),
+                 state: e.level === 'success' ? 'hi' : '' };
+      })) + '</div>';
+
+    html += '</div></div>';
+    $('p-today').innerHTML = html;
+
+    // charts need the DOM in place first
+    var tz = (s.series || {}).tzOffsetMin || 0;
+    if (open.length && $('chart-pnl')) {
+      var p = open[0];
+      drawLine($('chart-pnl'), ((s.series || {}).pnl || {})[p.index] || [], {
+        tz: tz, fmt: inrSigned, baseline: 0,
+        aria: 'Profit on the open ' + p.index + ' trade through today.',
+        empty: 'Collecting prices. The line appears within a minute of the market opening.',
+        refs: [{ v: p.targetPnl, color: '#35E39A', label: inrSigned(p.targetPnl) },
+               { v: p.stopLossPnl, color: '#FF5C7A', label: inrSigned(p.stopLossPnl) }],
+        yTicks: [{ v: 0, label: '₹0' }],
+      });
+    }
+    if (watchIndex && $('chart-spot')) {
+      var idx = s.indices.filter(function (i) { return i.index === watchIndex; })[0] || {};
+      var pos = open.filter(function (x) { return x.index === watchIndex; })[0];
+      var zones = [], refs = [];
+      if (pos && pos.range) {
+        zones = [{ from: pos.range.breakevenLow, to: pos.range.breakevenHigh,
+                   color: '#35E39A', opacity: 0.1 },
+                 { from: pos.range.low, to: pos.range.high, color: '#35E39A', opacity: 0.16 }];
+        refs = [{ v: pos.range.high, color: '#35E39A', label: num(pos.range.high) },
+                { v: pos.range.low, color: '#35E39A', label: num(pos.range.low) }];
+      }
+      $('spotnow').textContent = idx.spot == null ? '—' : num(idx.spot, 2);
+      $('spotnote').textContent = pos && pos.range
+        ? 'The green band is the range where you keep the whole premium.'
+        : 'The day’s price path for ' + watchIndex + '.';
+      drawLine($('chart-spot'), ((s.series || {}).spot || {})[watchIndex] || [], {
+        tz: tz, fmt: function (v) { return num(v, 2); },
+        axisFmt: function (v) { return num(v, 0); }, fill: !refs.length,
+        aria: watchIndex + ' price through today.',
+        empty: 'No prices recorded yet today.',
+        zones: zones, refs: refs,
+      });
+    }
+    if ($('chart-days')) {
+      drawBars($('chart-days'), s.daily || [], {
+        aria: 'Realised profit per day over the last ten sessions.',
+        empty: 'No closed trades yet.' });
+    }
+  }
+
+  // ── why no trade ───────────────────────────────────────────────
+  function checkRow(c, failed) {
+    return '<div class="' + (failed ? 'reason' : 'row') + '">' +
+      '<span class="mk ' + (c.na ? 'na' : c.passed ? 'ok' : 'no') + '">' +
+      (c.na ? '–' : c.passed ? '✓' : '✕') + '</span>' +
+      '<span><b>' + esc(c.label) + '</b>' +
+      (failed ? esc(c.detail) : '<span class="micro"> — ' + esc(c.detail) + '</span>') +
+      '</span></div>';
+  }
+
+  function whyPanel(idx) {
+    if (!idx.active) {
+      return '<div class="glass pad"><h2 style="font-size:20px">' + esc(idx.index) +
+        ' is switched off</h2><p class="hint" style="margin-top:8px;max-width:62ch">' +
+        'The bot is not scanning this index. Turn it on under Settings if you want it ' +
+        'watched. It will need about two weeks of recorded price history before it is ' +
+        'allowed to sell options there.</p><div class="btnrow" style="margin-top:15px">' +
+        '<button class="btn sm" data-goto="tab-settings">Open settings</button></div></div>';
+    }
+    if (idx.hasPosition) {
+      return '<div class="glass pad" style="border-color:rgba(53,227,154,.3)">' +
+        '<h2 style="font-size:20px">' + esc(idx.index) + ' is already in a trade</h2>' +
+        '<p class="hint" style="margin-top:8px;max-width:62ch">The bot holds one position ' +
+        'per index at a time, so it is not hunting for another ' + esc(idx.index) +
+        ' trade. It is watching the open one every second against its stop loss and target.' +
+        '</p><div class="btnrow" style="margin-top:15px">' +
+        '<button class="btn sm" data-goto="tab-today">See the open trade</button></div></div>';
+    }
+    var gate = idx.gate;
+    if (!gate || !gate.checks || !gate.checks.length) {
+      return '<div class="glass pad"><h2 style="font-size:20px">Not checked yet</h2>' +
+        '<p class="hint" style="margin-top:8px;max-width:62ch">' + esc(idx.index) +
+        ' has not been through the checks yet today. The first full scan runs at 9:30 am ' +
+        'and then every five minutes.</p></div>';
+    }
+
+    var failed = gate.checks.filter(function (c) { return !c.passed; });
+    var passed = gate.checks.filter(function (c) { return c.passed; });
+    var html = '';
+
+    if (!failed.length) {
+      html += '<div class="glass pad" style="border-color:rgba(53,227,154,.32)">' +
+        '<h2 style="font-size:21px">Every check passed</h2>' +
+        '<p class="hint" style="margin-top:7px">As of ' + esc((gate.time || '').slice(0, 5)) +
+        ', nothing was blocking a trade on ' + esc(idx.index) + '.</p></div>';
+    } else {
+      html += '<div class="verdict"><h2>' +
+        (failed.length === 1 ? 'One thing blocked ' : failed.length + ' things blocked ') +
+        esc(idx.index) + '</h2>' +
+        '<p class="hint" style="margin-top:7px">Checked at ' + esc((gate.time || '').slice(0, 5)) + '. ' +
+        (gate.score != null
+          ? 'The market signals scored ' + gate.score + ' out of ' + gate.maxScore +
+            ', against a threshold of ' + gate.threshold + '.'
+          : '') + '</p>' +
+        '<div class="reasons">' + failed.map(function (c) { return checkRow(c, true); }).join('') +
+        '</div></div>';
+    }
+
+    if (passed.length) {
+      html += '<div class="glass pad"><details><summary>The other ' + passed.length +
+        ' check' + (passed.length === 1 ? '' : 's') + ' passed</summary>' +
+        '<div class="passed">' + passed.map(function (c) { return checkRow(c, false); }).join('') +
+        '</div></details></div>';
+    }
+
+    if (idx.signals && idx.signals.length) {
+      var total = idx.signals.reduce(function (a, x) { return a + (x.score || 0); }, 0);
+      html += '<div class="glass"><div class="hd"><h2>The six market signals</h2>' +
+        '<span class="chip cy spacer">' + total + ' of ' + (idx.maxScore || 9) + ' points</span></div>' +
+        '<div class="pad" style="padding:16px 6px 6px"><div class="tw"><table>' +
+        '<thead><tr><th>Signal</th><th>What it says right now</th><th class="n">Points</th></tr></thead>' +
+        '<tbody>' + idx.signals.map(function (sig) {
+          return '<tr><td>' + esc(sig.label) + '</td><td class="hint">' + esc(sig.value) +
+            '</td><td class="n"><span class="pts' + (sig.score ? ' on' : '') + '">' +
+            (sig.score ? '+' + sig.score : '0') + '</span></td></tr>';
+        }).join('') + '</tbody><tfoot><tr><td colspan="2">Total, needs ' +
+        (idx.threshold || 4) + ' to trade</td><td class="n mono">' + total + ' of ' +
+        (idx.maxScore || 9) + '</td></tr></tfoot></table></div></div></div>';
+    }
+    return html;
+  }
+
+  function renderWhy(s) {
+    var indices = s.indices || [];
+    if (!indices.length) { $('p-why').innerHTML = '<div class="empty">Starting up.</div>'; return; }
+    if (!APP.whyIndex || !indices.some(function (i) { return i.index === APP.whyIndex; })) {
+      var blocked = indices.filter(function (i) {
+        return i.active && !i.hasPosition && i.gate && i.gate.allowed === false; });
+      APP.whyIndex = (blocked[0] || indices[0]).index;
+    }
+    var current = indices.filter(function (i) { return i.index === APP.whyIndex; })[0];
+
+    $('p-why').innerHTML =
+      '<div><h1 style="font-size:24px">Why the bot is not trading</h1>' +
+      '<p class="hint" style="margin-top:6px;max-width:60ch">Ten checks run before anything ' +
+      'opens. All ten must pass.</p></div>' +
+      '<div class="idxpick" role="group" aria-label="Choose an index">' +
+      indices.map(function (i) {
+        var colour = !i.active ? 'var(--ink-3)'
+          : i.hasPosition ? 'var(--good)'
+          : i.gate && i.gate.allowed === false ? 'var(--bad)' : 'var(--ink-3)';
+        return '<button type="button" data-why="' + esc(i.index) + '" aria-pressed="' +
+          (i.index === APP.whyIndex) + '"><i class="dot" style="color:' + colour + '"></i>' +
+          esc(i.index) + '</button>';
+      }).join('') + '</div>' +
+      '<div class="stack">' + whyPanel(current) + '</div>';
+  }
+
+  // ── trades ─────────────────────────────────────────────────────
+  function renderTrades(data) {
+    if (!data) { $('p-trades').innerHTML = '<div class="empty">Loading…</div>'; return; }
+    var acct = (APP.state && APP.state.account) || {};
+    var rows = data.trades || [];
+    var shown = rows.filter(function (t) {
+      return APP.tradeFilter === 'all' ||
+        (APP.tradeFilter === 'w' ? t.won : !t.won); });
+
+    var html = '<div class="tiles">' +
+      '<div class="tile"><span class="label">Closed trades</span><span class="v">' +
+        (acct.closedTrades || 0) + '</span><span class="micro">' +
+        (rows.length ? 'Since ' + esc(shortDate(rows[rows.length - 1].date)) : 'None yet') + '</span></div>' +
+      '<div class="tile"><span class="label">Went your way</span><span class="v pos">' +
+        (acct.wins || 0) + ' of ' + (acct.closedTrades || 0) + '</span>' +
+        '<span class="micro">' + (acct.winRate == null ? '—' : acct.winRate + '% hit rate') +
+        '</span></div>' +
+      '<div class="tile"><span class="label">Won per ₹1 lost</span><span class="v">' +
+        (acct.profitFactor == null ? '—' : '₹' + acct.profitFactor) + '</span>' +
+        '<span class="micro">Above ₹1 means wins outweigh losses</span></div>' +
+      '<div class="tile"><span class="label">Worst single trade</span><span class="v neg">' +
+        (acct.worstTrade ? inrSigned(acct.worstTrade) : '—') + '</span>' +
+        '<span class="micro">Best was ' +
+        (acct.bestTrade ? inrSigned(acct.bestTrade) : '—') + '</span></div></div>';
+
+    html += '<div class="glass"><div class="hd"><h2>Account value over time</h2>' +
+      '<span class="chip cy spacer mono">' + inr(acct.settledCapital) + '</span></div>' +
+      '<div class="pad"><div id="chart-equity" class="chartbox"></div>' +
+      '<p class="micro" style="margin-top:10px">Closed trades only. Anything still open ' +
+      'is not counted yet.</p></div></div>';
+
+    html += '<div class="glass"><div class="hd"><h2>Every closed trade</h2>' +
+      '<span class="spacer pillrow">' +
+      [['all', 'All'], ['w', 'Winners'], ['l', 'Losers']].map(function (f) {
+        return '<button data-filter="' + f[0] + '" aria-pressed="' +
+          (APP.tradeFilter === f[0]) + '">' + f[1] + '</button>';
+      }).join('') + '</span></div>' +
+      '<div class="pad" style="padding:16px 6px 6px">';
+
+    html += shown.length
+      ? '<div class="tw"><table><thead><tr><th>Date</th><th>Index</th><th>What it did</th>' +
+        '<th class="n">Result</th><th>Why it closed</th></tr></thead><tbody>' +
+        shown.map(function (t) {
+          return '<tr><td class="mono stripe ' + (t.won ? 'w' : 'l') + '">' + esc(shortDate(t.date)) +
+            '</td><td>' + esc(t.index || '—') + '</td><td>' + esc(t.label) + '</td>' +
+            '<td class="n mono ' + (t.won ? 'pos' : 'neg') + '">' + inrSigned(t.pnl) + '</td>' +
+            '<td class="micro">' + esc(t.reason || '—') + '</td></tr>';
+        }).join('') + '</tbody></table></div>'
+      : '<div class="empty">No trades match that filter.</div>';
+    html += '</div></div>';
+
+    $('p-trades').innerHTML = html;
+
+    var equity = data.equity || [];
+    if ($('chart-equity')) {
+      drawLine($('chart-equity'), equity.map(function (row, i) { return [i, row.capital]; }), {
+        labels: equity.map(function (row) { return shortDate(row.date); }),
+        fmt: inr, aria: 'Account value across recent trading days.',
+        empty: 'The curve appears once trades start closing.',
+      });
+    }
+  }
+
+  // ── health ─────────────────────────────────────────────────────
+  function healthRows(rows) {
+    return '<div class="rows">' + rows.map(function (r) {
+      var state = r.state === 'ok' ? 'ok' : r.state === 'warn' ? 'wn' : 'wn';
+      var word = r.state === 'ok' ? 'Working' : r.state === 'off' ? 'Off' : 'Needs a look';
+      return '<div><span class="who">' + esc(r.label) + '</span>' +
+        '<span class="hint">' + esc(r.detail) + '</span>' +
+        '<span class="state ' + state + '" style="' +
+        (r.state === 'bad' ? 'color:var(--bad)' : '') + '"><i class="dot"></i>' +
+        esc(word) + '</span></div>';
+    }).join('') + '</div>';
+  }
+
+  function renderHealth(s) {
+    var h = s.health || {};
+    var allOk = !(h.needsAttention || []).length;
+    $('p-health').innerHTML =
+      '<div class="glass hero"><div class="hero-in">' +
+      '<div><h1 style="font-size:25px"><span class="grad">' +
+        (allOk ? 'Everything is running.' : 'Some things need a look.') + '</span></h1>' +
+      '<p class="hint" style="margin-top:9px;max-width:56ch">A quiet day can mean there were ' +
+      'no good trades, or it can mean something broke. This page tells you which.' +
+      (allOk ? '' : ' Look at: ' + esc((h.needsAttention || []).join(', ')) + '.') +
+      '</p></div>' +
+      '<div class="money"><span class="label">Checks passing</span>' +
+      '<div class="big num ' + (allOk ? 'pos' : '') + '">' + (h.passing || 0) +
+      '<span style="color:var(--ink-3);font-size:.55em"> / ' + (h.total || 0) + '</span></div>' +
+      '<p class="hint" style="margin-top:7px">Running since ' + hhmm(h.startedAt) + '</p>' +
+      '</div></div></div>' +
+      '<h3 class="sec">Connections</h3>' + healthRows(h.connections || []) +
+      '<h3 class="sec">Data the bot needs</h3>' + healthRows(h.data || []) +
+      '<h3 class="sec">Problems</h3><div class="glass pad">' +
+      (h.lastError
+        ? '<p class="hint"><b class="neg">' + esc(h.lastError.message) + '</b><br>' +
+          'At ' + hhmm(h.lastError.ts) + (h.lastError.where ? ', in ' + esc(h.lastError.where) : '') +
+          '. The bot carried on and will try again on the next cycle.</p>'
+        : '<p class="hint">Nothing has failed since the bot started. When something does, ' +
+          'it appears here with the time it happened.</p>') +
+      '</div>';
+  }
+
+  // ── settings ───────────────────────────────────────────────────
+  function settingControl(row) {
+    var id = 'set-' + row.key;
+    var disabled = row.editable ? '' : ' disabled';
+    if (row.kind === 'bool') {
+      return '<span class="tg" data-key="' + esc(row.key) + '">' +
+        '<button type="button" data-tg="1" aria-pressed="' + (row.value === true) + '"' + disabled + '>On</button>' +
+        '<button type="button" data-tg="0" aria-pressed="' + (row.value === false) + '"' + disabled + '>Off</button></span>';
+    }
+    if (row.kind === 'indices') {
+      return '<span class="idxbox" data-key="' + esc(row.key) + '">' +
+        (row.choices || []).map(function (c) {
+          return '<label><input type="checkbox" value="' + esc(c) + '"' +
+            ((row.value || []).indexOf(c) > -1 ? ' checked' : '') + disabled + '>' + esc(c) + '</label>';
+        }).join('') + '</span>';
+    }
+    if (row.kind === 'dates') {
+      return '<textarea id="' + id + '" data-key="' + esc(row.key) + '" data-kind="dates"' +
+        disabled + '>' + esc((row.value || []).join('\n')) + '</textarea>';
+    }
+    var shown = row.value;
+    if (row.kind === 'pct') shown = Math.round(row.value * 100) + '%';
+    else if (row.kind === 'loss') shown = '₹' + num(Math.abs(row.value));
+    else if (row.kind === 'money') shown = '₹' + num(row.value);
+    return '<input id="' + id + '" type="text" data-key="' + esc(row.key) + '" data-kind="' +
+      row.kind + '" value="' + esc(shown) + '"' + disabled + '>';
+  }
+
+  function renderSettings(data) {
+    if (!data) { $('p-settings').innerHTML = '<div class="empty">Loading…</div>'; return; }
+    var groups = {};
+    data.settings.forEach(function (row) {
+      (groups[row.group] = groups[row.group] || []).push(row); });
+
+    var html = '<div><h1 style="font-size:24px">Settings</h1>' +
+      '<p class="hint" style="margin-top:6px;max-width:60ch">Changes apply at the next market ' +
+      'check. You never need to edit a file or log into the server.</p></div>';
+
+    Object.keys(data.groups).forEach(function (key) {
+      var rows = groups[key];
+      if (!rows) return;
+      html += '<h3 class="sec">' + esc(data.groups[key]) + '</h3><div class="fields">' +
+        rows.map(function (row) {
+          return '<div class="fld"><label for="set-' + esc(row.key) + '">' + esc(row.label) +
+            (row.overridden ? ' <span class="chip cy" style="padding:1px 7px">changed</span>' : '') +
+            '</label><p class="hint">' + esc(row.help) + '</p>' +
+            '<span class="ctl">' + settingControl(row) + '</span></div>';
+        }).join('') + '</div>';
+    });
+
+    html += '<div class="btnrow"><button class="btn pri" id="savesettings">Save settings</button>' +
+      '<button class="btn" id="resetsettings">Reset to defaults</button></div>' +
+      '<div id="settingsmsg"></div>';
+    $('p-settings').innerHTML = html;
+  }
+
+  function collectSettings() {
+    var out = {};
+    document.querySelectorAll('#p-settings [data-key]').forEach(function (el) {
+      var key = el.getAttribute('data-key');
+      if (el.classList.contains('tg')) {
+        var on = el.querySelector('[data-tg="1"]');
+        out[key] = on.getAttribute('aria-pressed') === 'true';
+      } else if (el.classList.contains('idxbox')) {
+        out[key] = Array.prototype.slice
+          .call(el.querySelectorAll('input:checked')).map(function (i) { return i.value; });
+      } else if (el.getAttribute('data-kind') === 'dates') {
+        out[key] = el.value.split(/[\s,]+/).filter(Boolean);
+      } else if (!el.disabled) {
+        var raw = String(el.value).replace(/[₹,\s]/g, '');
+        var kind = el.getAttribute('data-kind');
+        if (kind === 'pct') out[key] = parseFloat(raw.replace('%', '')) / 100;
+        else if (kind === 'loss') out[key] = -Math.abs(parseFloat(raw));
+        else if (kind === 'time') out[key] = el.value.trim();
+        else out[key] = raw;
+      }
+    });
+    delete out.paper_capital;
+    return out;
+  }
+
+  // ── tabs ───────────────────────────────────────────────────────
+  var TABS = ['today', 'why', 'trades', 'health', 'settings'];
+
+  function showTab(name) {
+    APP.tab = name;
+    if (location.hash.replace('#', '') !== name) {
+      history.replaceState(null, '', '#' + name);
+    }
+    TABS.forEach(function (t) {
+      var on = t === name;
+      var tab = $('tab-' + t);
+      tab.setAttribute('aria-selected', on ? 'true' : 'false');
+      $('p-' + t).hidden = !on;
+    });
+    window.scrollTo(0, 0);
+    if (name === 'trades') loadTrades();
+    else if (name === 'settings') loadSettings();
+    else paint();
+  }
+
+  function paint() {
+    var s = APP.state;
+    if (!s) return;
+    renderChrome(s);
+    if (APP.tab === 'today') renderToday(s);
+    else if (APP.tab === 'why') renderWhy(s);
+    else if (APP.tab === 'health') renderHealth(s);
+  }
+
+  async function loadTrades() {
+    try {
+      APP.trades = await api('/api/trades');
+    } catch (e) { toast(e.message); }
+    renderTrades(APP.trades);
+  }
+
+  async function loadSettings(force) {
+    if (!APP.settings || force) {
+      try { APP.settings = await api('/api/settings'); }
+      catch (e) { toast(e.message); return; }
+    }
+    renderSettings(APP.settings);
+  }
+
+  // ── commands ───────────────────────────────────────────────────
+  async function waitForCommand(id, done) {
+    for (var i = 0; i < 20; i++) {
+      await new Promise(function (r) { setTimeout(r, 700); });
+      try {
+        var res = await api('/api/control/result/' + id);
+        if (res.status === 'done') { done(res); return; }
+      } catch (e) { /* keep waiting */ }
+    }
+    done({ ok: false, message: 'That is taking longer than expected.' });
+  }
+
+  async function command(path, body, label) {
+    try {
+      var res = await api(path, { method: 'POST', body: JSON.stringify(body || {}) });
+      toast(res.message || label || 'Done.');
+      if (res.id) {
+        waitForCommand(res.id, function (out) {
+          toast(out.message || (out.ok ? 'Done.' : 'That did not work.'));
+          refresh();
+        });
+      } else {
+        refresh();
+      }
+    } catch (e) { toast(e.message); }
+  }
+
+  async function refresh() {
+    try {
+      APP.state = await api('/api/state');
+      APP.connected = true;
+      paint();
+    } catch (e) { /* the stream will recover */ }
+  }
+
+  // ── one delegated click handler for the whole page ─────────────
+  document.addEventListener('click', function (ev) {
+    var t = ev.target.closest('[data-goto],[data-why],[data-filter],[data-close],[data-tg],button');
+    if (!t) return;
+
+    if (t.hasAttribute('data-goto')) { showTab(t.getAttribute('data-goto').replace('tab-', '')); return; }
+    if (t.hasAttribute('data-why')) { APP.whyIndex = t.getAttribute('data-why'); renderWhy(APP.state); return; }
+    if (t.hasAttribute('data-filter')) { APP.tradeFilter = t.getAttribute('data-filter'); renderTrades(APP.trades); return; }
+    if (t.hasAttribute('data-close')) {
+      var index = t.getAttribute('data-close');
+      if (t.getAttribute('data-armed') === '1') {
+        command('/api/control/close', { index: index });
+      } else {
+        t.setAttribute('data-armed', '1');
+        t.textContent = 'Tap again to close ' + index;
+        t.className = 'btn dan sm';
+        setTimeout(function () {
+          if (!t.isConnected) return;
+          t.removeAttribute('data-armed');
+          t.textContent = 'Close this trade now';
+          t.className = 'btn sm';
+        }, 5000);
+      }
+      return;
+    }
+    if (t.hasAttribute('data-tg')) {
+      t.parentNode.querySelectorAll('[data-tg]').forEach(function (b) {
+        b.setAttribute('aria-pressed', b === t ? 'true' : 'false'); });
+      return;
+    }
+
+    switch (t.id) {
+      case 'pausebtn':  $('pauseconfirm').hidden = false; break;
+      case 'pauseno':   $('pauseconfirm').hidden = true; break;
+      case 'pauseyes':  command('/api/control/pause'); break;
+      case 'resumebtn': command('/api/control/resume'); break;
+      case 'rescanbtn': command('/api/control/rescan'); break;
+      case 'savesettings': saveSettings(); break;
+      case 'resetsettings': resetSettings(); break;
+      default: break;
+    }
+  });
+
+  document.addEventListener('keydown', function (ev) {
+    if (!ev.target.matches || !ev.target.matches('[role="tab"]')) return;
+    var i = TABS.indexOf(ev.target.id.replace('tab-', ''));
+    var next = ev.key === 'ArrowRight' || ev.key === 'ArrowDown' ? i + 1
+             : ev.key === 'ArrowLeft' || ev.key === 'ArrowUp' ? i - 1 : null;
+    if (next == null) return;
+    ev.preventDefault();
+    var name = TABS[(next + TABS.length) % TABS.length];
+    $('tab-' + name).focus();
+    showTab(name);
+  });
+
+  async function saveSettings() {
+    var msg = $('settingsmsg');
+    msg.innerHTML = '';
+    try {
+      var res = await api('/api/settings', {
+        method: 'POST', body: JSON.stringify(collectSettings()) });
+      APP.settings = { groups: (APP.settings || {}).groups, settings: res.settings };
+      renderSettings(APP.settings);
+      var out = $('settingsmsg');
+      if (res.errors && res.errors.length) {
+        out.innerHTML = '<div class="err">' +
+          res.errors.map(function (e) { return esc(e); }).join('<br>') + '</div>';
+      }
+      var count = Object.keys(res.applied || {}).length;
+      if (count) {
+        out.innerHTML += '<div class="saved">Saved. The next market check will use ' +
+          'the new ' + (count === 1 ? 'value' : 'values') + '.</div>';
+      } else if (!res.errors.length) {
+        out.innerHTML += '<div class="saved">Nothing to change.</div>';
+      }
+      refresh();
+    } catch (e) { msg.innerHTML = '<div class="err">' + esc(e.message) + '</div>'; }
+  }
+
+  async function resetSettings() {
+    try {
+      var res = await api('/api/settings/reset', { method: 'POST' });
+      APP.settings = { groups: (APP.settings || {}).groups, settings: res.settings };
+      renderSettings(APP.settings);
+      $('settingsmsg').innerHTML = '<div class="saved">Everything is back to its default.</div>';
+      refresh();
+    } catch (e) { toast(e.message); }
+  }
+
+  // ── live stream ────────────────────────────────────────────────
+  function startStream() {
+    if (!window.EventSource) { setInterval(refresh, 5000); return; }
+    var source = new EventSource('/api/stream');
+    source.addEventListener('state', function (ev) {
+      try {
+        APP.state = JSON.parse(ev.data);
+        APP.connected = true;
+        paint();
+      } catch (e) { /* ignore a malformed frame */ }
+    });
+    source.addEventListener('activity', function (ev) {
+      try {
+        var item = JSON.parse(ev.data);
+        if (item.level === 'success' || item.level === 'warning' || item.level === 'error') {
+          toast(item.title);
+        }
+      } catch (e) { /* ignore */ }
+    });
+    source.onerror = function () {
+      APP.connected = false;
+      if (APP.state) renderChrome(APP.state);
+    };
+    source.onopen = function () { APP.connected = true; };
+  }
+
+  // ── boot ───────────────────────────────────────────────────────
+  TABS.forEach(function (t) {
+    $('tab-' + t).addEventListener('click', function () { showTab(t); });
+  });
+  window.addEventListener('hashchange', function () {
+    var name = location.hash.replace('#', '');
+    if (TABS.indexOf(name) > -1 && name !== APP.tab) showTab(name);
+  });
+
+  $('p-today').innerHTML =
+    '<div class="glass pad"><div class="empty">Connecting to the bot…</div></div>';
+  refresh().then(function () {
+    var initial = location.hash.replace('#', '');
+    if (TABS.indexOf(initial) > -1 && initial !== 'today') showTab(initial);
+    startStream();
+  });
+})();
+
+</script>
+</body>
+</html>

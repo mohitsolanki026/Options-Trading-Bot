@@ -19,12 +19,22 @@ better" holds for every strategy and the monitors stay strategy-agnostic.
 
 import logging
 
+from utils import settings_store
 from utils.greeks_engine import calculate_greeks
 from config.settings import (
     MIN_LEG_OI, MIN_CREDIT_PCT, STRANGLE_TARGET_DELTA,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _tuned(key, fallback):
+    """A dashboard override if the user set one, else the env-derived constant."""
+    try:
+        value = settings_store.override(key)
+    except Exception:
+        return fallback
+    return fallback if value is None else value
 RISK_FREE_RATE = 0.065
 
 
@@ -46,8 +56,10 @@ def _short_straddle(_):
 def _short_strangle(_):
     # Strikes chosen by delta when greeks are available (else ±1 strike fallback).
     return [
-        {"offset": +1, "type": "CE", "action": "SELL", "target_delta": STRANGLE_TARGET_DELTA},
-        {"offset": -1, "type": "PE", "action": "SELL", "target_delta": STRANGLE_TARGET_DELTA},
+        {"offset": +1, "type": "CE", "action": "SELL",
+         "target_delta": _tuned("strangle_target_delta", STRANGLE_TARGET_DELTA)},
+        {"offset": -1, "type": "PE", "action": "SELL",
+         "target_delta": _tuned("strangle_target_delta", STRANGLE_TARGET_DELTA)},
     ]
 
 
@@ -204,8 +216,8 @@ def build_position(
     expiry: str,
     trade_id: int = 0,
     greeks: dict = None,
-    min_oi: int = MIN_LEG_OI,
-    min_credit_pct: float = MIN_CREDIT_PCT,
+    min_oi: int = None,
+    min_credit_pct: float = None,
 ) -> dict:
     """
     Build a concrete, priced position for `strategy`.
@@ -215,6 +227,11 @@ def build_position(
     (< min_credit_pct of spot). When `greeks` is supplied, legs flagged with a
     target_delta are strike-selected by delta instead of a fixed offset.
     """
+    if min_oi is None:
+        min_oi = _tuned("min_leg_oi", MIN_LEG_OI)
+    if min_credit_pct is None:
+        min_credit_pct = _tuned("min_credit_pct", MIN_CREDIT_PCT)
+
     key = normalise_strategy(strategy)
     if key is None:
         logger.warning(f"⚠️ Unknown strategy '{strategy}' — cannot build position.")

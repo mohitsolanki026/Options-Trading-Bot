@@ -1,6 +1,10 @@
-import requests
 import logging
+from datetime import datetime
+
+import requests
+
 from config.settings import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+from utils.runtime import RUNTIME
 
 logger = logging.getLogger(__name__)
 
@@ -15,13 +19,15 @@ def send_message(message: str, chat_id: str = None):
         "parse_mode": "HTML"
     }
     try:
-        r = requests.post(url, json=payload, timeout=5)
+        r = requests.post(url, json=payload, timeout=8)
         if r.status_code == 200:
+            RUNTIME.health.set(telegram_last_at=datetime.now().isoformat(timespec="seconds"))
             logger.info("✅ Telegram message sent.")
-        else:
-            logger.error(f"❌ Telegram error: {r.text}")
+            return True
+        logger.error(f"❌ Telegram error: {r.text}")
     except Exception as e:
         logger.error(f"❌ Telegram exception: {e}")
+    return False
 
 
 def send_market_update(nifty_ltp, vix_ltp):
@@ -73,7 +79,8 @@ def send_options_summary(summary: dict):
         f"ATM PE LTP : ₹{summary['atm_pe_ltp']}\n"
         f"━━━━━━━━━━━━━━━━━━"
     )
-    
+    send_message(msg)
+
 
 def send_trade_alert(action: str, symbol: str, price: float, reason: str):
     """Send trade entry/exit alert."""

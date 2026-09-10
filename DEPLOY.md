@@ -1,8 +1,9 @@
 # Deploying the Trading Bot to GCP
 
 This bot is a **long-running, stateful process**: background threads (5-min monitor,
-1-sec tick monitor, WebSocket feed) plus a daily scheduler, with local state in
-`data/` (`paper_state.json`, the SQLite trade journal) and logs in `logs/`.
+1-sec tick monitor, WebSocket feed, web dashboard) plus a daily scheduler, with local
+state in `data/` (`paper_state.json`, `settings.json`, `risk_state.json`, the SQLite
+trade journal) and logs in `logs/`.
 
 ➡️ **Use a Compute Engine VM with a systemd service.** Cloud Run / Cloud Functions are
 a poor fit here — they are request-driven, scale to zero, kill long background threads,
@@ -108,7 +109,65 @@ sudo systemctl start trading-bot
 sudo systemctl status trading-bot
 ```
 
-## 6. Operate
+## 6. The dashboard
+
+A web UI runs **inside the same process**, on a daemon thread beside the monitor loops.
+It is not a separate service on purpose: open positions, live tick prices, the entry-gate
+verdict and feed health exist only in this process's memory, so a separate reader would
+show a stale, partial picture and could not stop anything.
+
+It binds to **loopback only** by default and requires a token.
+
+```bash
+# On the VM, find the token (generated once, chmod 600):
+cat ~/trading_bot/data/web_token.txt
+```
+
+### Reaching it safely
+
+The dashboard can close positions, so **do not open port 8787 to the internet.**
+Two good options:
+
+**Tailscale (simplest).** Install it on the VM and on your phone or laptop, then set
+`WEB_UI_HOST=100.x.x.x` (the VM's Tailscale address) and browse to
+`http://<vm>:8787`. No public exposure at all.
+
+**SSH tunnel (nothing to install).**
+
+```bash
+gcloud compute ssh trading-bot --zone=asia-south1-a -- -N -L 8787:localhost:8787
+# then open http://localhost:8787
+```
+
+For a permanent HTTPS address, put Caddy in front and keep the app on loopback.
+
+### Environment
+
+| Variable | Default | What it does |
+|---|---|---|
+| `WEB_UI_ENABLED` | `1` | Set `0` to run the bot with no dashboard at all |
+| `WEB_UI_HOST` | `127.0.0.1` | Bind address |
+| `WEB_UI_PORT` | `8787` | Port |
+| `WEB_UI_TOKEN` | *(generated)* | Access token; blank writes one to `data/web_token.txt` |
+| `WEB_UI_AUTH` | `on` | `off` disables the login — only on a private bind |
+
+A dashboard failure never stops the bot: startup is wrapped, and every write goes
+through a command queue drained by the tick loop rather than mutating trading state
+from the web thread.
+
+## 7. Settings: env is the default, the dashboard is the override
+
+Tunables are still read from the environment, but they are now **defaults**. Anything
+changed on the Settings screen is saved to `data/settings.json` and wins, and takes
+effect at the next market check with no restart. Resetting a value to its default
+removes the override, so a later env change reaches it again.
+
+Editable live: capital per trade, daily and per-trade loss limits, max open positions,
+which indices to watch, the entry window, cooldown, expiry and event blackouts, the
+signal threshold, the IV-rank buy and sell levels, liquidity and premium floors, and
+whether Telegram alerts are sent.
+
+## 8. Operate
 
 ```bash
 # Live logs
@@ -124,22 +183,34 @@ Keep the VM **running 24/7** — the bot self-schedules its own daily jobs (08:3
 09:30 scan, 15:30 EOD) and sleeps between them; the daily 08:30 `init_client` re-login is
 required, so don't stop the instance overnight.
 
-## 7. Persistence & safety notes
+## 9. Persistence & safety notes
 
-- `data/paper_state.json` and the SQLite journal survive restarts and live on the boot
-  disk — back them up (or move to a Persistent Disk) if you care about history.
+- `data/paper_state.json`, `data/settings.json`, `data/risk_state.json` and the SQLite
+  journal survive restarts and live on the boot disk — back them up (or move to a
+  Persistent Disk) if you care about history.
 - On restart, the bot restores any open position and force-exits it if expired.
+- **A daily loss halt now survives a restart.** `data/risk_state.json` records it with
+  the date, and today's realised P&L is rehydrated from the trade journal. Previously a
+  restart after the daily limit was hit brought the bot back up unhalted and it kept
+  trading on the same bad day. A halt stamped with an earlier date is ignored, so each
+  morning still starts clean.
+- Resuming from the dashboard is refused while the loss limit is still breached.
 - This deploys **paper mode**. Before going live (real orders), you'll add the broker
   order layer and re-verify — do not point this at real capital yet.
 
 ## Entry logic & tuning
 
-Entries are gated in **code** (`utils/signal_engine.py:entry_allowed`), not by the LLM.
+Entries are gated in **code** (`utils/signal_engine.py:evaluate_entry`), not by the LLM.
 A trade requires: a weighted confluence score ≥ threshold, a **confirmed directional/vol
 bias**, rich **IV rank** for premium selling, no event/expiry blackout, no post-exit
 cooldown, and correlation limits — then the LLM is asked once as a **veto** only.
 
-All thresholds are env-tunable (see `.env.development`): `MAX_CAPITAL_PER_TRADE`,
+Every check is evaluated and stored in the journal's `gate_log` table, not just the
+first failure, which is what lets the dashboard's **Why no trade** screen explain a
+quiet day in full.
+
+All thresholds are env-tunable (see `.env.development`) and editable live in the
+dashboard: `MAX_CAPITAL_PER_TRADE`,
 `MAX_CORRELATED_SHORT`, `ENTRY_COOLDOWN_MIN`, `EXPIRY_BLACKOUT_DTE`,
 `EVENT_BLACKOUT_DATES`, `IV_MIN_HISTORY`, `MIN_LEG_OI`, `MIN_CREDIT_PCT`,
 `STRANGLE_TARGET_DELTA`.
