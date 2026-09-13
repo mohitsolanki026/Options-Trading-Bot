@@ -28,8 +28,6 @@ def _result(score=5, bias="BULLISH", confirmed=True):
 
 @pytest.fixture
 def state(monkeypatch):
-    monkeypatch.setattr(monitor, "send_message", lambda *a, **k: None)
-    monkeypatch.setattr(monitor, "send_alert", lambda *a, **k: None)
     monkeypatch.setattr(ptmod, "log_trade_entry", lambda **k: 1)
     monkeypatch.setattr(ptmod, "log_trade_exit", lambda **k: None)
     monkeypatch.setattr(ptmod, "update_daily_summary", lambda: None)

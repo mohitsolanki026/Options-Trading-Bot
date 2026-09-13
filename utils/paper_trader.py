@@ -3,9 +3,10 @@ import logging
 import threading
 from datetime import datetime
 from utils.trade_journal import (
-    log_trade_entry, log_trade_exit, update_daily_summary
+    log_trade_entry, log_trade_exit, update_daily_summary, record_equity
 )
 from utils import strategies
+from utils.runtime import RUNTIME
 
 logger = logging.getLogger(__name__)
 STATE_FILE = "data/paper_state.json"
@@ -124,6 +125,12 @@ class PaperTrader:
                 notes      = reason,
             )
             update_daily_summary()
+            # Stamp the closing account value so the equity curve is a stored
+            # fact rather than something re-derived every time it is drawn.
+            try:
+                record_equity(self.capital)
+            except Exception as e:
+                logger.warning(f"⚠️ Could not record equity point: {e}")
 
             logger.info(
                 f"🔴 Paper EXIT [{index}]: exit=₹{position['exit_combined']} "
@@ -240,6 +247,8 @@ class PaperTrader:
             with open(tmp, "w") as f:
                 json.dump(state, f, indent=2, default=str)
             os.replace(tmp, STATE_FILE)   # atomic write
+            RUNTIME.health.set(
+                state_saved_at=datetime.now().isoformat(timespec="seconds"))
             logger.debug("💾 Paper state saved.")
 
     def load_state(self) -> dict:

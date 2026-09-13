@@ -10,20 +10,29 @@ Live macro-calendar fetching is intentionally out of scope (unreliable to do
 headless); maintain the date list manually — it's the high-signal subset anyway.
 """
 
-import os
 import json
 import logging
+import os
 from datetime import date
+
+from utils import settings_store
 
 logger = logging.getLogger(__name__)
 
 EVENT_FILE = "data/event_blackout.json"
-EXPIRY_BLACKOUT_DTE = int(os.getenv("EXPIRY_BLACKOUT_DTE", 0))   # 0 = expiry day only
+EXPIRY_BLACKOUT_DTE = int(os.getenv("EXPIRY_BLACKOUT_DTE", 0))   # fallback only
 
 
 def _event_dates() -> set:
-    """Union of env EVENT_BLACKOUT_DATES (ISO, comma-sep) and data/event_blackout.json."""
+    """
+    Union of the dates set in the dashboard, the env list, and
+    data/event_blackout.json. Any one of them can block a day.
+    """
     dates = set()
+    try:
+        dates.update(settings_store.get("event_blackout_dates") or [])
+    except Exception:
+        pass
     env = os.getenv("EVENT_BLACKOUT_DATES", "")
     dates.update(d.strip() for d in env.split(",") if d.strip())
     if os.path.exists(EVENT_FILE):
@@ -41,6 +50,11 @@ def is_blackout(days_to_expiry, today: str = None) -> tuple[bool, str]:
     today = today or date.today().isoformat()
     if today in _event_dates():
         return True, f"scheduled event ({today})"
-    if days_to_expiry is not None and days_to_expiry <= EXPIRY_BLACKOUT_DTE:
+    try:
+        chosen = settings_store.override("expiry_blackout_dte")
+    except Exception:
+        chosen = None
+    dte_limit = EXPIRY_BLACKOUT_DTE if chosen is None else chosen
+    if days_to_expiry is not None and days_to_expiry <= dte_limit:
         return True, f"expiry day (DTE {days_to_expiry})"
     return False, ""

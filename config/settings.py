@@ -65,6 +65,16 @@ BANKNIFTY_TOKEN  = "99926009"
 INDIA_VIX_SYMBOL = "India VIX"
 INDIA_VIX_TOKEN  = "99926017"
 
+# --- Web dashboard ---
+# Binds to loopback by default. This UI can close positions, so put it behind
+# Tailscale or an HTTPS reverse proxy before exposing it anywhere.
+WEB_UI_ENABLED = os.getenv("WEB_UI_ENABLED", "1").strip().lower() not in ("0", "false", "no")
+WEB_UI_HOST    = os.getenv("WEB_UI_HOST", "127.0.0.1")
+WEB_UI_PORT    = int(os.getenv("WEB_UI_PORT", 8787))
+WEB_UI_TOKEN   = os.getenv("WEB_UI_TOKEN", "").strip()
+# "off" disables the login entirely. Only sensible on a private loopback bind.
+WEB_UI_AUTH    = os.getenv("WEB_UI_AUTH", "on").strip().lower()
+
 # --- Timing ---
 MARKET_OPEN      = "09:15"
 SAFE_ENTRY_START = "09:30"

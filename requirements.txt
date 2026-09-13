@@ -21,6 +21,12 @@ numpy>=1.24
 scipy>=1.10                 # greeks_engine: scipy.stats.norm (Black-Scholes)
 tabulate>=0.9              # trade journal table formatting
 
+# --- Web dashboard ---
+# Runs on a daemon thread inside the bot process; see web/server.py for why it
+# is not a separate service.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+
 # --- LLM brain ---
 # Install the provider set in LLM_PROVIDER (config/settings.py). Anthropic is the
 # default; uncomment another if you switch providers.

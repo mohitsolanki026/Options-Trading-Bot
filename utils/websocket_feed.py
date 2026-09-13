@@ -1,10 +1,16 @@
-import threading
 import logging
+import threading
+import time
 from datetime import datetime
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 from config.settings import ANGEL_API_KEY, ANGEL_CLIENT_ID
+from utils.runtime import RUNTIME
 
 logger = logging.getLogger(__name__)
+
+# Stamping a timestamp on every single tick is pure overhead at this rate, and
+# the dashboard only needs to know the feed is fresh to within a second or two.
+_HEALTH_STAMP_EVERY = 2.0
 
 
 # ─────────────────────────────────────────
@@ -65,6 +71,7 @@ class WebSocketFeed:
         self._running    = False
         self._thread     = None
         self._subscribed = []  # list of {exchange, tokens} to subscribe on connect
+        self._last_health_stamp = 0.0
 
         self.on_tick_callback = None  # optional external callback
 
@@ -73,6 +80,7 @@ class WebSocketFeed:
     def _on_open(self, wsapp):
         logger.info("✅ WebSocket connected.")
         self._running = True
+        RUNTIME.health.set(feed_connected=True)
         if self._subscribed:
             for sub in self._subscribed:
                 self._do_subscribe(sub["exchange"], sub["tokens"])
@@ -89,6 +97,14 @@ class WebSocketFeed:
                 token = str(data.get("token", ""))
                 if token:
                     TICK_STORE.update(token, data)
+                    now = time.time()
+                    if now - self._last_health_stamp >= _HEALTH_STAMP_EVERY:
+                        self._last_health_stamp = now
+                        RUNTIME.health.set(
+                            feed_connected=True,
+                            feed_last_tick=datetime.now().isoformat(timespec="seconds"),
+                            feed_tokens=len(TICK_STORE.all_tokens()),
+                        )
                     ltp = data.get("last_traded_price", 0) / 100
                     #if int(data.get("token", 0)) in [99926000, 99926017]:
                      #   logger.info(f"⚡ Tick: token={token} ltp=₹{ltp}")
@@ -100,10 +116,13 @@ class WebSocketFeed:
     def _on_error(self, wsapp, *args):
         error = args[0] if args else "Unknown error"
         logger.error(f"❌ WebSocket error: {error}")
+        RUNTIME.health.set(feed_connected=False)
+        RUNTIME.health.note_error(error, where="websocket")
 
     def _on_close(self, wsapp, *args):
         logger.warning("⚠️ WebSocket closed.")
         self._running = False
+        RUNTIME.health.set(feed_connected=False)
     # ── SUBSCRIBE ────────────────────────
 
     def _exchange_type(self, exchange: str) -> int:
