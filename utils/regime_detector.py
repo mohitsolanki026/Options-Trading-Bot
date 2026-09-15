@@ -20,7 +20,7 @@ REGIME_STRATEGY = {
     "TRENDING_DOWN": "Bear Put Spread",
     "SIDEWAYS":      "Short Straddle / Iron Condor",
     "HIGH_VOL":      "Buy Straddle / Strangle",
-    "EXPIRY":        "Short Straddle + Hedge",
+    "EXPIRY":        "No new positions (expiry gamma)",
 }
 
 REGIME_EMOJI = {
@@ -104,12 +104,16 @@ def detect_regime(
     if range_size > 0:
         position = (nifty_spot - support) / range_size
 
+        # Support is where put writers defend and resistance where call
+        # writers do, so price pressed against them tends to bounce back.
+        # This used to say the opposite of the signal engine's reading of the
+        # very same numbers.
         if position < 0.2:
-            scores["TRENDING_DOWN"] += 2
-            reasons.append(f"Spot near support ({support})")
-        elif position > 0.8:
             scores["TRENDING_UP"] += 2
-            reasons.append(f"Spot near resistance ({resistance})")
+            reasons.append(f"Spot pressed on support ({support}), bounce likely")
+        elif position > 0.8:
+            scores["TRENDING_DOWN"] += 2
+            reasons.append(f"Spot pressed on resistance ({resistance}), rejection likely")
         else:
             scores["SIDEWAYS"] += 2
             reasons.append(f"Spot mid-range ({nifty_spot})")

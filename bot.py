@@ -129,12 +129,13 @@ def init_client():
     if open_trades:
         for index_key, pos in open_trades.items():
             ws.subscribe("NFO", strategies.all_tokens(pos))
-            events.warning(
-                "position.restored", f"Open {index_key} position restored",
+            events.info(
+                "position.restored", f"Managing the open {index_key} position",
                 f"Strategy : {pos['strategy']}\n"
                 f"Net Prem : ₹{pos['net_credit']} ({pos['direction']})\n"
                 f"Expiry   : {pos['expiry']}\n"
-                f"It is being managed again from now.",
+                f"Opened   : {pos.get('entry_time', 'unknown')}\n"
+                f"Watched again from now against its stop and target.",
                 index=index_key,
             )
     else:

@@ -12,6 +12,16 @@ logger = logging.getLogger(__name__)
 STATE_FILE = "data/paper_state.json"
 
 
+def _paper_costs() -> tuple:
+    """(slippage fraction per leg, flat charges per order leg) from settings."""
+    try:
+        from utils import settings_store
+        return (float(settings_store.get("paper_slippage_pct")),
+                float(settings_store.get("paper_charges_per_order")))
+    except Exception:
+        return 0.0, 0.0
+
+
 class PaperTrader:
     """
     Simulates real trading without placing actual orders.
@@ -102,7 +112,10 @@ class PaperTrader:
                 logger.warning(f"⚠️ No open trade for {index} to exit.")
                 return {}
 
-            total_pnl = strategies.realise_pnl(position, price_map)
+            slippage, per_order = _paper_costs()
+            total_pnl = strategies.realise_pnl(
+                position, price_map, slippage_pct=slippage,
+                charges=strategies.round_trip_charges(position, per_order))
             position["pnl"]         = total_pnl
             position["exit_time"]   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             position["exit_reason"] = reason

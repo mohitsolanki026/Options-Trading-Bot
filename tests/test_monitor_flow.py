@@ -11,9 +11,12 @@ class FakeObj:
 
 
 def _result(score=5, bias="BULLISH", confirmed=True):
+    from datetime import date, timedelta
     df_oi, options_df = make_chain()
+    # ten days out: an expiry in the past would (correctly) be closed on sight
+    expiry = (date.today() + timedelta(days=10)).strftime("%d%b%Y").upper()
     return {
-        "index": "NIFTY", "expiry": "26JUN2026",
+        "index": "NIFTY", "expiry": expiry,
         "options_df": options_df, "df_oi": df_oi,
         "spot_ltp": 24105, "summary": make_summary(),
         "greeks": {"theta": -10, "days_to_exp": 10, "avg_iv": 14.0},
@@ -35,8 +38,8 @@ def state(monkeypatch):
     monkeypatch.setattr(monitor, "is_safe_to_enter", lambda: True)
     monkeypatch.setattr(monitor, "minutes_to_close", lambda: 120)
     # LLM veto: approve by default
-    monkeypatch.setattr(llm_brain, "get_trade_decision",
-                        lambda **k: {"action": "ENTER", "strategy": "bull call spread",
+    monkeypatch.setattr(llm_brain, "get_trade_veto",
+                        lambda **k: {"action": "APPROVE", "confidence": "HIGH",
                                      "reasoning": "ok"})
     return {
         "obj": FakeObj(),
@@ -64,10 +67,24 @@ def test_skips_when_bias_not_confirmed(state):
 
 
 def test_llm_can_veto_a_code_approved_trade(state, monkeypatch):
-    monkeypatch.setattr(llm_brain, "get_trade_decision",
-                        lambda **k: {"action": "SKIP", "reasoning": "event risk"})
+    seen = {}
+    def veto(**k):
+        seen.update(k["proposal"])
+        return {"action": "VETO", "confidence": "HIGH", "reasoning": "event risk"}
+    monkeypatch.setattr(llm_brain, "get_trade_veto", veto)
     monitor.manage_index(state, "NIFTY", _result())
     assert not state["paper_trader"].has_position("NIFTY")
+    # the reviewer was shown the actual trade, legs and all
+    assert seen["strategy"] == "bull_call_spread" and len(seen["legs"]) == 2
+    assert seen["stop_loss_pnl"] < 0 < seen["target_pnl"]
+
+
+def test_unreachable_llm_fails_open(state, monkeypatch):
+    def boom(**k):
+        raise RuntimeError("no network")
+    monkeypatch.setattr(llm_brain, "get_trade_veto", boom)
+    monitor.manage_index(state, "NIFTY", _result())
+    assert state["paper_trader"].has_position("NIFTY")
 
 
 def test_does_not_double_enter(state):

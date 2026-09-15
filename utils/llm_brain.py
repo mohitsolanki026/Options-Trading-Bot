@@ -224,14 +224,118 @@ Based on all the above data, respond with ONLY a valid JSON object in this exact
 }}
 
 Rules:
-- If signal score < 4, action must be SKIP
+- If the signal score is below the threshold, action must be SKIP
 - If trading_halted is True, action must be SKIP
-- If days_to_exp <= 1, prefer short premium strategies
-- Never suggest naked options without hedge
+- Do not suggest selling premium within 2 days of expiry; that is a gamma trap for a held position
 - Respond ONLY with the JSON object, no explanation outside it
 """
     
     return prompt.strip()
+
+
+# ─────────────────────────────────────────
+#  VETO PROMPT  (the entry check the monitor actually uses)
+# ─────────────────────────────────────────
+#
+# The old flow asked the LLM what it would do, then the code did something
+# else: the LLM would bless a "short straddle" and the bot would place a bear
+# put spread, so the review was of a trade that never happened. Now the code
+# builds the exact trade first and the LLM is shown it, with one job: veto it
+# if it can name a specific risk the numbers miss.
+
+def build_veto_prompt(proposal: dict, summary: dict, greeks: dict, regime: dict,
+                      confluence: dict, risk_status: dict, ta: dict = None) -> str:
+    now = datetime.now().strftime("%d %b %Y %H:%M")
+    legs = "\n".join(
+        f"  {l['action']} {l['option_type']} {int(l['strike'])} @ ₹{l['entry_ltp']}"
+        for l in proposal.get("legs", [])
+    )
+    ta_lines = ""
+    if ta and ta.get("signals"):
+        ta_lines = "\n".join(f"  - {x['name']}: {x['note']}" for x in ta["signals"])
+    signal_lines = "\n".join(
+        f"  - {x['label']}: {x['value']} ({'+' if x['score'] else ''}{x['score']})"
+        for x in confluence.get("signals", [])
+    )
+    hold = proposal.get("hold_plan", "held until target, stop, or expiry morning")
+
+    return f"""
+You are the risk reviewer for an automated Indian index-options desk. The system has ALREADY decided to place the trade below after passing all of its own checks. Your only job is to VETO it if you can name a specific, material risk that the numbers do not capture. Do not veto because the trade is merely uncertain; every trade is. If you cannot name a concrete reason, APPROVE.
+
+=== PROPOSED TRADE [{now}] ===
+Index        : {proposal.get('index')}
+Strategy     : {proposal.get('strategy')}
+Legs:
+{legs}
+Lots         : {proposal.get('lots')} × {proposal.get('lot_size')}
+Net premium  : ₹{proposal.get('net_credit')} per unit ({proposal.get('direction')})
+Stop loss    : ₹{proposal.get('stop_loss_pnl')} P&L
+Target       : ₹{proposal.get('target_pnl')} P&L
+Expiry       : {proposal.get('expiry')} ({greeks.get('days_to_exp')} days)
+Holding plan : {hold}
+Margin       : ₹{proposal.get('margin_per_lot', 'n/a')} per lot
+
+=== MARKET ===
+Spot         : ₹{summary.get('nifty_spot')}
+India VIX    : {greeks.get('vix', 'N/A')}
+Avg IV       : {greeks.get('avg_iv')}%  (IV rank {confluence.get('iv_rank')})
+PCR          : {summary.get('pcr')}   Max pain: {summary.get('max_pain')}
+Support      : {summary.get('support')}   Resistance: {summary.get('resistance')}
+Regime       : {regime.get('regime_label')}
+
+=== WHY THE SYSTEM LIKES IT ===
+Score {confluence.get('score')}/{confluence.get('max_score')}, view {confluence.get('overall_bias')}
+{signal_lines}
+{('Technicals:' + chr(10) + ta_lines) if ta_lines else ''}
+
+=== RISK STATUS ===
+Day P&L ₹{risk_status.get('daily_pnl')}, headroom ₹{risk_status.get('headroom')}, open positions {risk_status.get('open_positions')}
+
+Respond with ONLY this JSON:
+{{
+  "action": "APPROVE" | "VETO",
+  "confidence": "HIGH" | "MEDIUM" | "LOW",
+  "reasoning": "one or two sentences naming the specific risk, or why none applies",
+  "risk_warning": "the single thing to watch while this trade is open"
+}}
+""".strip()
+
+
+def parse_veto(raw: str) -> dict:
+    """
+    Read the reviewer's answer. An unreadable answer is treated as no
+    objection, with a flag, because the code gate is the safety net and a
+    garbled sentence from the reviewer should not silently block trading.
+    """
+    try:
+        text = raw
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        data = json.loads(text.strip())
+        action = str(data.get("action", "")).upper()
+        if action not in ("APPROVE", "VETO"):
+            raise ValueError(f"unexpected action {action!r}")
+        data["action"] = action
+        return data
+    except (json.JSONDecodeError, ValueError, AttributeError) as e:
+        logger.error(f"❌ Veto parse error: {e} | Raw: {str(raw)[:200]}")
+        return {"action": "APPROVE", "confidence": "LOW", "parse_error": True,
+                "reasoning": "Could not read the reviewer's answer; proceeding on the code gate.",
+                "risk_warning": "Check the LLM response format"}
+
+
+def get_trade_veto(proposal: dict, summary: dict, greeks: dict, regime: dict,
+                   confluence: dict, risk_status: dict, vix: float,
+                   ta: dict = None) -> dict:
+    """Ask the LLM to approve or veto one concrete, already-built trade."""
+    prompt = build_veto_prompt(proposal, summary, {**greeks, "vix": vix}, regime,
+                               confluence, risk_status, ta)
+    raw    = call_llm(prompt)          # raises on failure; the caller fails open
+    verdict = parse_veto(raw)
+    logger.info(f"✅ LLM veto check: {verdict.get('action')} ({verdict.get('confidence')})")
+    return verdict
 
 
 # ─────────────────────────────────────────

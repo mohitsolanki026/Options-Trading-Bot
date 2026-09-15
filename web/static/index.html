@@ -730,6 +730,7 @@ textarea{font:inherit;font-family:var(--mono);font-size:13px;padding:9px 11px;bo
         '<span class="chip ' + (p.winning ? 'on' : 'off') + '"><i class="dot"></i>' +
           (p.winning ? 'Ahead' : 'Behind') + '</span>' +
         '<span class="micro spacer">Opened ' + esc((p.entryTime || '').slice(11, 16)) +
+        (p.daysHeld ? ' · day ' + (p.daysHeld + 1) : '') +
         ' · expires ' + esc(p.expiry || '') + '</span></div>' +
       '<div class="pad stack" style="gap:22px">' +
         (p.range ? rangeBand(p) : '<p class="hint">' + esc(p.plain) + '</p>') +
@@ -755,7 +756,7 @@ textarea{font:inherit;font-family:var(--mono);font-size:13px;padding:9px 11px;bo
           '. Premium ' + inr(p.premium) + '.</p></div>' +
         '<div class="btnrow">' +
           '<button class="btn sm" data-close="' + esc(p.index) + '">Close this trade now</button>' +
-          '<span class="micro">Or leave it. Everything closes automatically by 3:00 pm.</span>' +
+          '<span class="micro">' + esc(p.holdNote || '') + '</span>' +
         '</div>' +
       '</div></div>';
   }
@@ -1172,6 +1173,13 @@ textarea{font:inherit;font-family:var(--mono);font-size:13px;padding:9px 11px;bo
             ((row.value || []).indexOf(c) > -1 ? ' checked' : '') + disabled + '>' + esc(c) + '</label>';
         }).join('') + '</span>';
     }
+    if (row.kind === 'choice') {
+      return '<select id="' + id + '" data-key="' + esc(row.key) + '" data-kind="choice"' + disabled + '>' +
+        (row.choices || []).map(function (c) {
+          return '<option value="' + esc(c) + '"' + (row.value === c ? ' selected' : '') + '>' +
+            esc(c.charAt(0).toUpperCase() + c.slice(1)) + '</option>';
+        }).join('') + '</select>';
+    }
     if (row.kind === 'dates') {
       return '<textarea id="' + id + '" data-key="' + esc(row.key) + '" data-kind="dates"' +
         disabled + '>' + esc((row.value || []).join('\n')) + '</textarea>';
@@ -1222,6 +1230,8 @@ textarea{font:inherit;font-family:var(--mono);font-size:13px;padding:9px 11px;bo
       } else if (el.classList.contains('idxbox')) {
         out[key] = Array.prototype.slice
           .call(el.querySelectorAll('input:checked')).map(function (i) { return i.value; });
+      } else if (el.getAttribute('data-kind') === 'choice') {
+        out[key] = el.value;
       } else if (el.getAttribute('data-kind') === 'dates') {
         out[key] = el.value.split(/[\s,]+/).filter(Boolean);
       } else if (!el.disabled) {

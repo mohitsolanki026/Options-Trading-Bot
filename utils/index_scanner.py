@@ -17,6 +17,17 @@ from utils.technical import run_technical_analysis
 
 logger = logging.getLogger(__name__)
 
+
+def _ta_horizon() -> tuple:
+    """(candle interval, days back) for the technical read, by holding mode."""
+    try:
+        from utils import settings_store
+        mode = settings_store.get("hold_mode")
+    except Exception:
+        mode = "positional"
+    return ("ONE_HOUR", 20) if mode == "positional" else ("FIFTEEN_MINUTE", 5)
+
+
 def analyze_index(obj, df_scrip, index_key, vix_ltp, risk_status, position=None,
                   with_llm: bool = True):
     """
@@ -51,11 +62,15 @@ def analyze_index(obj, df_scrip, index_key, vix_ltp, risk_status, position=None,
             return {}
         logger.info(f"💹 {index_key} spot: ₹{spot_ltp}")
 
+        # The technical read has to match the holding horizon: a 15-minute
+        # picture drives a trade closed the same afternoon, an hourly one a
+        # trade held for days.
+        interval, days_back = _ta_horizon()
         ta = run_technical_analysis(
             obj      = obj,
             token    = idx["token"],
-            interval = "FIFTEEN_MINUTE",
-            days_back = 5,
+            interval = interval,
+            days_back = days_back,
         )
 
         logger.info(f"📊 {index_key} TA: {ta.get('overall')} "
@@ -79,10 +94,12 @@ def analyze_index(obj, df_scrip, index_key, vix_ltp, risk_status, position=None,
         # ── 4b. IV rank (record today's IV, rank vs trailing history) ──
         avg_iv = float(greeks["avg_iv"] or 0.0)
         record_iv(index_key, avg_iv)
-        iv_rank = get_iv_rank(index_key, avg_iv)
+        vix_rank = get_vix_rank(obj, vix_ltp)          # cached once per day
+        iv_rank  = get_iv_rank(index_key, avg_iv)
+        iv_rank_source = "index"
         if iv_rank is None:
             # Bootstrap: use India-VIX percentile until per-index history builds.
-            iv_rank = get_vix_rank(obj, vix_ltp)
+            iv_rank, iv_rank_source = vix_rank, "vix"
             if iv_rank is not None:
                 logger.info(f"📈 {index_key} IV rank (VIX proxy): {iv_rank}")
 
@@ -108,6 +125,8 @@ def analyze_index(obj, df_scrip, index_key, vix_ltp, risk_status, position=None,
             regime         = regime["regime"],
             iv_rank        = iv_rank,
             ta             = ta,
+            vix_rank       = vix_rank,
+            iv_rank_source = iv_rank_source,
         )
 
         # ── 7. LLM decision (skipped on routine cycles; used as entry veto only) ──
@@ -150,6 +169,8 @@ def analyze_index(obj, df_scrip, index_key, vix_ltp, risk_status, position=None,
             "decision":   decision,
             "ta":         ta,
             "iv_rank":    iv_rank,
+            "iv_rank_source": iv_rank_source,
+            "vix_rank":   vix_rank,
         }
 
         logger.info(f"✅ {index_key} → {decision.get('action')} ({regime['regime']})")

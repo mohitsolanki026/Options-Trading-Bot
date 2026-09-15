@@ -7,7 +7,9 @@ ATM IV reading per index per day and computes an IV rank (0-100) over a trailing
 window, persisted to disk so it survives restarts.
 
 Until enough history is accumulated, get_iv_rank returns None ("unknown") and the
-signal engine treats premium-selling as not-yet-permitted — fail safe.
+scanner falls back to the India VIX percentile, which has years of history. Ten
+days was the old minimum; a rank over ten readings is noise, and on noise most
+days look "rich". Sixty is about a quarter of trading.
 """
 
 import json
@@ -23,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 IV_HISTORY_FILE = "data/iv_history.json"
 MAX_DAYS    = 252            # ~1 trading year
-MIN_HISTORY = int(os.getenv("IV_MIN_HISTORY", 10))   # fallback only
+MIN_HISTORY = int(os.getenv("IV_MIN_HISTORY", 60))   # fallback only
 
 
 def _min_history() -> int:

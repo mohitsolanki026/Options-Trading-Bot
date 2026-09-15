@@ -36,6 +36,7 @@ class TickMonitor:
         self._thread  = None
         self._last_log_time = 0
         self._last_off_hours_log = 0
+        self._unpriced_since = {}
 
     def start(self):
         self._thread = threading.Thread(target=self._loop, daemon=True,
@@ -47,11 +48,16 @@ class TickMonitor:
         self._running = False
 
     def _is_market_hours(self) -> bool:
+        """
+        From the opening bell, not 09:30. A position carried overnight can gap
+        through its stop at 09:15 and must be caught then, not fifteen minutes
+        later.
+        """
         now = datetime.now()
         if now.weekday() >= 5:
             return False
         t = now.hour * 60 + now.minute
-        return (9 * 60 + 30) <= t <= (15 * 60 + 30)
+        return (9 * 60 + 15) <= t <= (15 * 60 + 30)
 
     # ─────────────────────────────────────
     #  MAIN LOOP
@@ -112,11 +118,19 @@ class TickMonitor:
         if not pos:
             return
 
-        # Live ticks first; fall back to the latest options-chain snapshot
+        # Live ticks first (ignoring any older than the freshness limit), then
+        # the latest options-chain snapshot.
         df_oi = self.STATE.get("index_data", {}).get(index_key, {}).get("df_oi")
-        price_map = strategies.current_price_map(pos, TICK_STORE, df_oi)
-        if not price_map:
-            return  # no fresh prices — cannot evaluate this tick
+        price_map = strategies.current_price_map(
+            pos, TICK_STORE, df_oi, max_tick_age=strategies.TICK_MAX_AGE_SEC)
+
+        # A stop or target needs EVERY leg priced. With one leg missing, the
+        # other leg's move shows up unhedged, up to several times the real
+        # figure, and the old code would fire a stop loss on that phantom.
+        if not strategies.price_map_complete(pos, price_map):
+            self._note_unpriced(index_key, pos, price_map)
+            return
+        self._unpriced_since.pop(index_key, None)
 
         pnl   = strategies.unrealised_pnl(pos, price_map)
         level = strategies.check_levels(pos, price_map)
@@ -141,6 +155,23 @@ class TickMonitor:
     def _exit(self, index_key: str, reason: str, df_oi):
         from utils.monitor import handle_exit
         handle_exit(self.STATE, index_key, reason, df_oi)
+
+    UNPRICED_WARN_AFTER = 180   # seconds without a full set of prices
+
+    def _note_unpriced(self, index_key: str, pos: dict, price_map: dict):
+        """Say so, once, if a position has been unpriceable for a while."""
+        now = time.time()
+        since = self._unpriced_since.setdefault(index_key, now)
+        if now - since >= self.UNPRICED_WARN_AFTER and not pos.get("_unpriced_warned"):
+            pos["_unpriced_warned"] = True
+            missing = ", ".join(strategies.missing_legs(pos, price_map))
+            RUNTIME.health.note_error(
+                f"No fresh price for {index_key} {missing}", where="tick_monitor")
+            events.warning(
+                "position.unpriced", f"Cannot price the {index_key} position",
+                f"No fresh price for {missing} for over {self.UNPRICED_WARN_AFTER // 60} "
+                f"minutes. Its stop loss and target are not being checked until prices "
+                f"return. The feed may be down.", index=index_key)
 
     # ─────────────────────────────────────
     #  COMMANDS FROM THE DASHBOARD

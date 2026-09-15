@@ -32,7 +32,19 @@ def isolated_bot(tmp_path, monkeypatch):
     events._reset_for_tests()
     control._reset_for_tests()
 
+    # No test may reach a paid LLM. The monitor fails open when the reviewer
+    # is unreachable, so this leaves the code gate in charge; a test that
+    # wants a verdict patches get_trade_veto itself.
+    from utils import llm_brain
+    from utils.websocket_feed import TICK_STORE
+    def _no_llm(*a, **k):
+        raise RuntimeError("LLM calls are disabled in tests")
+    monkeypatch.setattr(llm_brain, "call_llm", _no_llm)
+    TICK_STORE._ticks.clear()
+
     yield
+
+    TICK_STORE._ticks.clear()
 
     settings_store._reset_cache_for_tests("data/settings.json")
 

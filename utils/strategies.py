@@ -18,6 +18,8 @@ better" holds for every strategy and the monitors stay strategy-agnostic.
 """
 
 import logging
+import os
+import re
 
 from utils import settings_store
 from utils.greeks_engine import calculate_greeks
@@ -93,9 +95,18 @@ def _bear_put_spread(_):
 
 
 # name -> (leg_builder, sl_pct, target_pct)
+#
+# Sold premium: the stop is 100% of the credit (the premium has doubled) and
+# the target is 50% decay. The old 40% stop was hit by ordinary intraday noise
+# long before any decay could arrive, which is exactly the pattern the journal
+# showed: many small stop-outs, targets almost never reached. Both numbers are
+# tunable from the dashboard; these are the fallbacks.
+SHORT_STOP_PCT   = float(os.getenv("SHORT_PREMIUM_STOP_PCT", 1.0))
+SHORT_TARGET_PCT = float(os.getenv("SHORT_PREMIUM_TARGET_PCT", 0.5))
+
 STRATEGIES = {
-    "short_straddle":   (_short_straddle,   0.40, 0.50),
-    "short_strangle":   (_short_strangle,   0.40, 0.50),
+    "short_straddle":   (_short_straddle,   None, None),    # None → live setting
+    "short_strangle":   (_short_strangle,   None, None),
     "long_straddle":    (_long_straddle,    0.40, 0.60),
     "long_ce":          (_long_ce,          0.40, 0.60),
     "long_pe":          (_long_pe,          0.40, 0.60),
@@ -120,13 +131,32 @@ ALIASES = {
 
 
 def normalise_strategy(name: str) -> str:
-    """Map a free-text strategy name to a canonical registry key (or None)."""
+    """
+    Map a free-text strategy name to a canonical registry key (or None).
+
+    The LLM writes names like "Short Straddle 24150". The trailing strike used
+    to make every suggestion unrecognisable, so none was ever honoured.
+    """
     if not name:
         return None
     key = name.strip().lower()
     if key in STRATEGIES:
         return key
+    key = re.sub(r"[\s\d,./@-]+$", "", key).strip()      # drop a strike suffix
+    if key in STRATEGIES:
+        return key
     return ALIASES.get(key)
+
+
+# Which strategies fit which confirmed view. An LLM suggestion outside its
+# row is ignored: a "short straddle" when the gate found a bearish edge would
+# be a different trade from the one the checks approved.
+COMPATIBLE = {
+    "SELL_PREMIUM": ("short_strangle", "short_straddle"),
+    "BUY_OPTIONS":  ("long_straddle",),
+    "BULLISH":      ("bull_call_spread", "long_ce"),
+    "BEARISH":      ("bear_put_spread", "long_pe"),
+}
 
 
 # ─────────────────────────────────────────
@@ -139,13 +169,17 @@ def select_strategy(confluence: dict, regime: dict, decision: dict = None) -> st
     If the LLM suggested a strategy that is in the allowed registry, honour it;
     otherwise fall back to the deterministic rule. The LLM is advisory only.
     """
-    # Honour a valid LLM suggestion
+    bias = (confluence or {}).get("overall_bias", "NEUTRAL")
+
+    # Honour an LLM suggestion only when it expresses the same view the
+    # checks confirmed.
     if decision:
         suggested = normalise_strategy(decision.get("strategy", ""))
-        if suggested:
+        if suggested and suggested in COMPATIBLE.get(bias, ()):
             return suggested
-
-    bias = (confluence or {}).get("overall_bias", "NEUTRAL")
+        if suggested:
+            logger.info(f"ℹ️ LLM suggested {suggested}, which does not fit a "
+                        f"{bias} view — using the default for that view.")
 
     if bias == "SELL_PREMIUM":
         return "short_strangle"   # defined OTM short vol, delta-selected strikes
@@ -238,6 +272,10 @@ def build_position(
         return None
 
     builder, sl_pct, target_pct = STRATEGIES[key]
+    if sl_pct is None:
+        sl_pct = _tuned("short_premium_stop_pct", SHORT_STOP_PCT)
+    if target_pct is None:
+        target_pct = _tuned("short_premium_target_pct", SHORT_TARGET_PCT)
     atm_strike = summary["atm_strike"]
     spot       = summary.get("nifty_spot", atm_strike)
     strike_gap = _infer_strike_gap(df_oi, fallback=50)
@@ -307,8 +345,11 @@ def build_position(
         "net_credit":     round(net_credit, 2),
         "entry_combined": round(sum(l["entry_ltp"] for l in legs), 2),
         "direction":      direction,
+        "sl_pct":         sl_pct,
+        "target_pct":     target_pct,
         "stop_loss_pnl":  stop_loss_pnl,
         "target_pnl":     target_pnl,
+        "priced_from":    "snapshot",
         "status":         "OPEN",
         "exit_combined":  None,
         "pnl":            None,
@@ -341,20 +382,84 @@ def _lookup_df_oi(df_oi, leg: dict) -> float:
     return float(row.iloc[0].get(f"{leg['option_type']}_LTP", 0) or 0)
 
 
-def current_price_map(position: dict, tick_store=None, df_oi=None) -> dict:
+# A tick older than this is not a price any more. Two minutes is long for a
+# liquid index option and short enough to notice a feed that has gone quiet.
+TICK_MAX_AGE_SEC = 120
+
+
+def current_price_map(position: dict, tick_store=None, df_oi=None,
+                      max_tick_age: float = None) -> dict:
     """
     Build {token: ltp} for a position, preferring live ticks, then the latest
-    options-chain snapshot (df_oi). Legs with no price are omitted (callers fall
-    back to entry price → flat on that leg).
+    options-chain snapshot (df_oi). Legs with no price are omitted; use
+    ``price_map_complete`` before trusting a stop or target on the result.
     """
     prices = {}
     for leg in position["legs"]:
-        ltp = tick_store.get_ltp(leg["token"]) if tick_store else 0
+        ltp = tick_store.get_ltp(leg["token"], max_age=max_tick_age) if tick_store else 0
         if not ltp:
             ltp = _lookup_df_oi(df_oi, leg)
         if ltp:
             prices[leg["token"]] = ltp
     return prices
+
+
+def price_map_complete(position: dict, price_map: dict) -> bool:
+    """True when every leg has a price. Stops and targets need all of them."""
+    return all(price_map.get(leg["token"]) for leg in position["legs"])
+
+
+def missing_legs(position: dict, price_map: dict) -> list:
+    return [f"{leg['option_type']} {int(leg['strike'])}"
+            for leg in position["legs"] if not price_map.get(leg["token"])]
+
+
+def _slip(price: float, action: str, pct: float, entering: bool) -> float:
+    """
+    Worsen a fill by ``pct`` of the price, floored at one tick of ₹0.05.
+    Selling gets less, buying pays more, whichever way the trade is going.
+    """
+    if not pct or price <= 0:
+        return round(price, 2)
+    move = max(price * pct, 0.05)
+    # entering a SELL leg or exiting a BUY leg means we are selling → receive less
+    selling = (action == "SELL") if entering else (action == "BUY")
+    return round(price - move if selling else price + move, 2)
+
+
+def reprice_entry(position: dict, fresh: dict, slippage_pct: float = 0.0) -> dict:
+    """
+    Replace snapshot entry prices with fresh ones and apply entry slippage, then
+    recompute credit, direction, and the stop and target that hang off them.
+
+    Before this the paper fill used the option chain fetched at the start of
+    the scan, up to half a minute earlier, which near expiry is a different
+    price. ``fresh`` is ``{token: ltp}``; legs with no fresh price keep the
+    snapshot price and are noted on the position.
+    """
+    used_fresh = 0
+    for leg in position["legs"]:
+        leg["snapshot_ltp"] = leg["entry_ltp"]
+        price = fresh.get(leg["token"])
+        if price:
+            leg["entry_ltp"] = float(price)
+            used_fresh += 1
+        leg["entry_ltp"] = _slip(leg["entry_ltp"], leg["action"], slippage_pct, entering=True)
+
+    legs      = position["legs"]
+    lot_size  = position["lot_size"]
+    lots      = position["lots"]
+    net_credit = sum(_sign(l) * l["entry_ltp"] for l in legs)
+    premium_value = abs(net_credit) * lot_size * lots
+    position["net_credit"]     = round(net_credit, 2)
+    position["direction"]      = "SELL" if net_credit >= 0 else "BUY"
+    position["entry_combined"] = round(sum(l["entry_ltp"] for l in legs), 2)
+    position["stop_loss_pnl"]  = round(-position["sl_pct"] * premium_value, 2)
+    position["target_pnl"]     = round(+position["target_pct"] * premium_value, 2)
+    position["slippage_pct"]   = slippage_pct
+    position["priced_from"]    = ("live" if used_fresh == len(legs)
+                                  else "partly-live" if used_fresh else "snapshot")
+    return position
 
 
 def all_tokens(position: dict) -> list:
@@ -377,18 +482,34 @@ def unrealised_pnl(position: dict, price_map: dict) -> float:
     return round(total, 2)
 
 
-def realise_pnl(position: dict, price_map: dict) -> float:
-    """Compute final P&L and stamp exit_ltp on each leg. Mutates position legs."""
+def realise_pnl(position: dict, price_map: dict, slippage_pct: float = 0.0,
+                charges: float = 0.0) -> float:
+    """
+    Compute final P&L and stamp exit_ltp on each leg. Mutates position legs.
+
+    Exit slippage worsens each leg's fill and ``charges`` (brokerage, STT and
+    exchange fees for the whole round trip) is deducted, so the paper result
+    is closer to what a real account would have kept.
+    """
     lot_size = position["lot_size"]
     total = 0.0
     combined_exit = 0.0
     for leg in position["legs"]:
         cur = price_map.get(leg["token"]) or leg["entry_ltp"]
+        cur = _slip(float(cur), leg["action"], slippage_pct, entering=False)
         leg["exit_ltp"] = cur
         combined_exit += cur
         total += _sign(leg) * lot_size * leg["lots"] * (leg["entry_ltp"] - cur)
+    total -= float(charges or 0.0)
     position["exit_combined"] = round(combined_exit, 2)
+    position["charges"]       = round(float(charges or 0.0), 2)
+    position["gross_pnl"]     = round(total + float(charges or 0.0), 2)
     return round(total, 2)
+
+
+def round_trip_charges(position: dict, per_order: float) -> float:
+    """Flat charges for every leg, in and out."""
+    return round(float(per_order or 0.0) * len(position["legs"]) * 2, 2)
 
 
 def check_levels(position: dict, price_map: dict) -> str:

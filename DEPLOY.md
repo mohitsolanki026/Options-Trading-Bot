@@ -163,9 +163,16 @@ effect at the next market check with no restart. Resetting a value to its defaul
 removes the override, so a later env change reaches it again.
 
 Editable live: capital per trade, daily and per-trade loss limits, max open positions,
+the lot cap, the holding mode and hold limit, the stop and target on sold premium,
 which indices to watch, the entry window, cooldown, expiry and event blackouts, the
-signal threshold, the IV-rank buy and sell levels, liquidity and premium floors, and
-whether Telegram alerts are sent.
+signal threshold, the IV-rank buy and sell levels, liquidity and premium floors,
+paper slippage and charges, and whether Telegram alerts are sent.
+
+**Holding mode.** `positional` (the default) carries trades overnight to their target,
+stop, or the morning of expiry, for at most `MAX_HOLD_DAYS`. The bot restores open
+positions at the 08:30 login and the tick monitor runs from 09:15, so a gap at the open
+is acted on at once. `intraday` flattens everything before 15:00; that was the old
+behaviour and the journal showed it cutting winners before their target.
 
 ## 8. Operate
 

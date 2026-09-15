@@ -114,7 +114,10 @@ def market_view() -> dict:
 
     close_at = now.replace(hour=15, minute=30, second=0, microsecond=0)
     to_close = max(0, int((close_at - now).total_seconds() // 60)) if phase == "open" else 0
+    from utils.monitor import _hold_mode, _max_hold_days
     return {
+        "holdMode":     _hold_mode(),
+        "maxHoldDays":  _max_hold_days(),
         "phase":        phase,
         "isOpen":       phase == "open",
         "label":        now.strftime("%a %-d %b"),
@@ -140,12 +143,16 @@ def schedule_view() -> list:
                          "label": "Next market check", "state": "next"})
         except ValueError:
             pass
-    rows += [
-        {"time": settings_store.get("entry_window_end"),
-         "label": "Last moment a new trade can open", "state": "todo"},
-        {"time": "15:00", "label": "Everything still open is closed", "state": "todo"},
-        {"time": "15:30", "label": "Day's report is sent", "state": "todo"},
-    ]
+    from utils.monitor import _hold_mode
+    rows.append({"time": settings_store.get("entry_window_end"),
+                 "label": "Last moment a new trade can open", "state": "todo"})
+    if _hold_mode() == "intraday":
+        rows.append({"time": "15:00", "label": "Everything still open is closed",
+                     "state": "todo"})
+    else:
+        rows.append({"time": "15:30", "label": "Open trades are carried overnight",
+                     "state": "todo"})
+    rows.append({"time": "15:30", "label": "Day's report is sent", "state": "todo"})
     for row in rows:
         try:
             hh, mm = row["time"].split(":")
@@ -243,11 +250,27 @@ def position_view(position: dict, state: dict) -> dict:
         idx = INDICES.get(position["index"])
         spot = (TICK_STORE.get_ltp(idx["token"]) if idx else None) or None
 
+    from utils.monitor import _hold_mode, _max_hold_days, days_held, position_dte
+    held, dte = days_held(position), position_dte(position)
+    if _hold_mode() == "intraday":
+        hold_note = "Or leave it. Everything closes automatically by 3:00 pm."
+    elif dte is not None and dte <= 0:
+        hold_note = "It expires today and closes at the next check."
+    else:
+        left = max(0, _max_hold_days() - held)
+        hold_note = (f"Or leave it. It closes at its target, its stop, the morning of "
+                     f"expiry, or in {left} day{'s' if left != 1 else ''}, whichever is first.")
+
     return {
         "index":       position["index"],
         "strategy":    position["strategy"],
         "label":       label,
         "plain":       plain,
+        "holdNote":    hold_note,
+        "daysHeld":    held,
+        "dte":         dte,
+        "pricedFrom":  position.get("priced_from"),
+        "charges":     _r(position.get("charges")),
         "direction":   position["direction"],
         "lots":        position["lots"],
         "lotSize":     position["lot_size"],

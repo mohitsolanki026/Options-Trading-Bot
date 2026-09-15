@@ -31,14 +31,32 @@ class TickStore:
                 "oi":        data.get("open_interest", 0),
                 "volume":    data.get("volume_trade_for_the_day", 0),
                 "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "ts":        time.time(),
             }
 
     def get(self, token: str) -> dict:
         with self._lock:
             return self._ticks.get(str(token), {})
 
-    def get_ltp(self, token: str) -> float:
-        return self.get(token).get("ltp", 0.0)
+    def age(self, token: str):
+        """Seconds since this token last ticked, or None if it never has."""
+        ts = self.get(token).get("ts")
+        return None if ts is None else max(0.0, time.time() - ts)
+
+    def get_ltp(self, token: str, max_age: float = None) -> float:
+        """
+        Last traded price, or 0.0 if there is none.
+
+        With ``max_age`` a price older than that many seconds is treated as
+        missing. A feed that dies quietly used to keep serving its final
+        prices forever, so positions were "managed" against frozen numbers.
+        """
+        tick = self.get(token)
+        if not tick:
+            return 0.0
+        if max_age is not None and (time.time() - tick.get("ts", 0)) > max_age:
+            return 0.0
+        return tick.get("ltp", 0.0)
 
     def all_tokens(self) -> list:
         with self._lock:

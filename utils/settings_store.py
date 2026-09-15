@@ -80,6 +80,18 @@ SPEC = [
     Setting("max_open_positions", "money", "Most trades open at once",
             "Counted across every index together.",
             "int", env.RISK_RULES["max_open_positions"], min=1, max=10),
+    Setting("max_lots_per_trade", "money", "Most lots in one trade",
+            "A hard cap on top of the risk-based sizing. Kept small until the "
+            "paper results earn a bigger one.",
+            "int", int(os.getenv("MAX_LOTS_PER_TRADE", 2)), min=1, max=50),
+    Setting("paper_slippage_pct", "money", "Assumed slippage per leg",
+            "Paper fills are worsened by this share of the option price on the "
+            "way in and out, to stand in for the bid-ask spread.",
+            "float", float(os.getenv("PAPER_SLIPPAGE_PCT", 0.005)), min=0.0, max=0.05),
+    Setting("paper_charges_per_order", "money", "Charges per order leg",
+            "Brokerage, STT and exchange fees, deducted for every leg on entry "
+            "and on exit. ₹25 is a fair estimate for Angel One index options.",
+            "money", float(os.getenv("PAPER_CHARGES_PER_ORDER", 25)), min=0, max=500),
 
     # ── scope ──
     Setting("active_indices", "scope", "Indices to watch",
@@ -87,6 +99,16 @@ SPEC = [
             "indices", _indices_default(), choices=list(env.INDICES.keys())),
 
     # ── timing ──
+    Setting("hold_mode", "timing", "How long trades are held",
+            "Positional holds a trade until its target, its stop, or the morning "
+            "of expiry. Intraday closes everything before the market shuts, which "
+            "gives sold premium almost no time to decay.",
+            "choice", os.getenv("HOLD_MODE", "positional").strip().lower(),
+            choices=["positional", "intraday"]),
+    Setting("max_hold_days", "timing", "Most days to hold a trade",
+            "Positional mode only. The trade is closed at the first check on the "
+            "day this is reached, even if it is neither at target nor at stop.",
+            "int", int(os.getenv("MAX_HOLD_DAYS", 5)), min=1, max=30),
     Setting("entry_window_start", "timing", "Open new trades from",
             "Avoids the noisy opening minutes.",
             "time", os.getenv("ENTRY_WINDOW_START", "09:40")),
@@ -97,17 +119,17 @@ SPEC = [
             "Minutes before the same index may be re-entered.",
             "int", env.ENTRY_COOLDOWN_MIN, min=0, max=240),
     Setting("expiry_blackout_dte", "timing", "Skip expiry days",
-            "Block new entries when days-to-expiry is at or below this. 0 means "
-            "expiry day only.",
-            "int", int(os.getenv("EXPIRY_BLACKOUT_DTE", 0)), min=0, max=5),
+            "Block new entries when days-to-expiry is at or below this. The last "
+            "two days are where a small move swings option prices the most.",
+            "int", int(os.getenv("EXPIRY_BLACKOUT_DTE", 2)), min=0, max=10),
     Setting("event_blackout_dates", "timing", "Skip these event dates",
             "Budget day, RBI policy, US Fed decisions. One ISO date per entry.",
             "dates", _event_dates_default()),
 
     # ── strictness ──
     Setting("entry_threshold", "strictness", "Signal points needed to trade",
-            "Out of 9. Higher means fewer but stronger trades.",
-            "int", int(os.getenv("ENTRY_THRESHOLD", 4)), min=1, max=9),
+            "Out of 10. Higher means fewer but stronger trades.",
+            "int", int(os.getenv("ENTRY_THRESHOLD", 4)), min=1, max=10),
     Setting("iv_rank_sell", "strictness", "Only sell options above",
             "How expensive options must be against their own recent history, out of 100.",
             "int", int(os.getenv("IV_RANK_SELL", 55)), min=0, max=100),
@@ -129,10 +151,17 @@ SPEC = [
             "How far out of the money strangle legs sit. Lower is further away "
             "and safer, with less premium.",
             "float", env.STRANGLE_TARGET_DELTA, min=0.05, max=0.45),
+    Setting("short_premium_stop_pct", "strictness", "Stop on sold premium",
+            "Close a sold-options trade once the premium has risen by this share "
+            "of what was collected. 1.0 means the premium has doubled.",
+            "float", float(os.getenv("SHORT_PREMIUM_STOP_PCT", 1.0)), min=0.2, max=3.0),
+    Setting("short_premium_target_pct", "strictness", "Target on sold premium",
+            "Close a sold-options trade once this share of the premium has decayed.",
+            "float", float(os.getenv("SHORT_PREMIUM_TARGET_PCT", 0.5)), min=0.1, max=0.9),
     Setting("iv_min_history", "strictness", "Days of history before selling",
-            "Premium selling stays blocked for an index until this many daily "
-            "volatility readings exist.",
-            "int", int(os.getenv("IV_MIN_HISTORY", 10)), min=1, max=252),
+            "An index's own IV rank is trusted only once this many daily readings "
+            "exist. Until then the India VIX percentile stands in for it.",
+            "int", int(os.getenv("IV_MIN_HISTORY", 60)), min=5, max=252),
 
     # ── alerts ──
     Setting("telegram_enabled", "alerts", "Send Telegram alerts",
@@ -167,6 +196,13 @@ def coerce(spec: Setting, value):
             if isinstance(value, bool):
                 return value
             return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+        if k == "choice":
+            out = str(value).strip().lower()
+            if out not in (spec.choices or []):
+                raise SettingError(f"{spec.label}: choose one of "
+                                   f"{', '.join(spec.choices or [])}.")
+            return out
 
         if k == "int":
             out = int(round(float(value)))

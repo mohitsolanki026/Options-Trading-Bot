@@ -40,6 +40,46 @@ def active_indices() -> list:
     return [i for i in picked if i in INDICES] or list(ACTIVE_INDICES)
 
 
+def _hold_mode() -> str:
+    """'positional' holds a trade for days; 'intraday' flattens before the close."""
+    try:
+        mode = settings_store.get("hold_mode")
+    except Exception:
+        mode = "positional"
+    return mode if mode in ("positional", "intraday") else "positional"
+
+
+def _max_hold_days() -> int:
+    try:
+        return int(settings_store.get("max_hold_days"))
+    except Exception:
+        return 5
+
+
+def days_held(position: dict) -> int:
+    """Calendar days since the position was opened, 0 on the entry day."""
+    try:
+        opened = datetime.strptime(position["entry_time"][:10], "%Y-%m-%d").date()
+        return max(0, (date.today() - opened).days)
+    except (KeyError, ValueError, TypeError):
+        return 0
+
+
+def position_dte(position: dict):
+    """Days until the position's expiry, or None if the expiry is unreadable."""
+    try:
+        return (datetime.strptime(position["expiry"], "%d%b%Y").date() - date.today()).days
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+def hold_plan_text() -> str:
+    if _hold_mode() == "intraday":
+        return "closed before 15:00 today, whatever happens"
+    return (f"held until its target, its stop, or the morning of expiry, "
+            f"for at most {_max_hold_days()} days")
+
+
 def _cooldown_minutes() -> int:
     try:
         chosen = settings_store.override("entry_cooldown_min")
@@ -159,6 +199,7 @@ def run_monitor_cycle(STATE: dict):
     rm = STATE["risk_manager"]
     rm.refresh()                       # pick up anything changed in the dashboard
     pt = STATE["paper_trader"]
+    rm.sync_positions(pt.open_trades)  # the paper trader is the source of truth
     risk_status = rm.get_status()
 
     STATE.setdefault("index_data", {})
@@ -206,29 +247,50 @@ def manage_index(STATE: dict, index_key: str, result: dict):
     position = pt.get_position(index_key)
 
     if position:
-        # ── 1. Stop loss / target (price-based) ──
-        price_map = strategies.current_price_map(position, TICK_STORE, df_oi)
-        level = pt.check_levels(index_key, price_map)
-        if level == "STOP_LOSS":
-            handle_exit(STATE, index_key, "Stop loss triggered", df_oi)
-            return
-        if level == "TARGET":
-            handle_exit(STATE, index_key, "Target achieved", df_oi)
-            return
+        # ── 1. Stop loss / target (price-based), only with every leg priced ──
+        price_map = strategies.current_price_map(
+            position, TICK_STORE, df_oi, max_tick_age=strategies.TICK_MAX_AGE_SEC)
+        if strategies.price_map_complete(position, price_map):
+            level = pt.check_levels(index_key, price_map)
+            if level == "STOP_LOSS":
+                handle_exit(STATE, index_key, "Stop loss triggered", df_oi)
+                return
+            if level == "TARGET":
+                handle_exit(STATE, index_key, "Target achieved", df_oi)
+                return
+        else:
+            logger.warning(f"⚠️ {index_key}: no fresh price for "
+                           f"{strategies.missing_legs(position, price_map)} — "
+                           f"stop and target not checked this cycle.")
 
-        # ── 2. End-of-day forced exit ──
-        mins = minutes_to_close()
-        if mins == 0:
-            handle_exit(STATE, index_key, "EOD forced exit — market closed", df_oi)
-            return
-        if mins <= 30:
-            handle_exit(STATE, index_key, f"EOD forced exit — {mins}min to close", df_oi)
-            return
-        if mins <= 60 and not position.get("_warned_60"):
-            position["_warned_60"] = True
-            events.info("position.closing_soon", f"{index_key} closes within the hour",
-                f"The {position['strategy']} will be closed automatically "
-                f"about 30 minutes before the market shuts.", index=index_key)
+        # ── 2. Time-based exits, by holding mode ──
+        if _hold_mode() == "intraday":
+            mins = minutes_to_close()
+            if mins == 0:
+                handle_exit(STATE, index_key, "EOD forced exit — market closed", df_oi)
+                return
+            if mins <= 30:
+                handle_exit(STATE, index_key, f"EOD forced exit — {mins}min to close", df_oi)
+                return
+            if mins <= 60 and not position.get("_warned_60"):
+                position["_warned_60"] = True
+                events.info("position.closing_soon", f"{index_key} closes within the hour",
+                    f"The {position['strategy']} will be closed automatically "
+                    f"about 30 minutes before the market shuts.", index=index_key)
+        else:
+            # Positional: the trade gets the days it needs, but never sits
+            # through expiry-day swings and never outlives the hold limit.
+            dte = position_dte(position)
+            if dte is not None and dte <= 0:
+                handle_exit(STATE, index_key,
+                    "Expiry day — closed at the first check, before the final-hours swings",
+                    df_oi)
+                return
+            held, limit = days_held(position), _max_hold_days()
+            if held >= limit:
+                handle_exit(STATE, index_key,
+                    f"Held for {held} days, the most allowed", df_oi)
+                return
 
         # ── 3. LLM-advised exit / adjust (advisory) ──
         _log_gate_state(index_key, result, state="holding",
@@ -265,10 +327,8 @@ def manage_index(STATE: dict, index_key: str, result: dict):
         logger.info(f"⚪ {index_key} no entry @ {now_str}: {verdict['blocking']}")
         return
 
-    # Code approved the trade → ask the LLM ONLY as a final veto (advisory).
-    if not _llm_approves_entry(STATE, index_key, result):
-        return
-
+    # Code approved the setup → build the concrete trade, size it, price it
+    # live, let the LLM veto exactly that trade, then enter.
     handle_enter(STATE, index_key, result)
 
 
@@ -290,37 +350,39 @@ def _log_gate_state(index_key: str, result: dict, state: str,
         logger.warning(f"⚠️ Could not record gate verdict for {index_key}: {e}")
 
 
-def _llm_approves_entry(STATE: dict, index_key: str, result: dict) -> bool:
+def _llm_approves_entry(STATE: dict, index_key: str, result: dict,
+                        proposal: dict) -> bool:
     """
-    The code gate already approved. Ask the LLM once, as a veto: it can object
-    (action == SKIP) but cannot force a trade. Also lets it suggest the strategy.
+    The code gate already approved and the trade is built. Ask the LLM once,
+    about THIS trade, as a veto: it can object but cannot force or change it.
     Fail-open: if the LLM errors, the code-approved trade still proceeds.
     """
-    from utils.llm_brain import get_trade_decision
+    from utils.llm_brain import get_trade_veto
     rm = STATE["risk_manager"]
     try:
-        decision = get_trade_decision(
+        verdict = get_trade_veto(
+            proposal    = proposal,
             summary     = result["summary"],
             greeks      = result["greeks"],
             regime      = result["regime"],
             confluence  = result["confluence"],
             risk_status = rm.get_status(),
             vix         = STATE.get("vix_ltp"),
-            position    = None,
             ta          = result.get("ta"),
         )
     except Exception as e:
         logger.warning(f"⚠️ {index_key} LLM veto unavailable ({e}) — proceeding on code gate.")
         RUNTIME.health.set(llm_ok=False)
+        result["veto"] = {"action": "APPROVE", "reasoning": "Reviewer unavailable; code gate only."}
         return True
 
     RUNTIME.health.set(llm_ok=True,
                        llm_last_at=datetime.now().isoformat(timespec="seconds"))
-    result["decision"] = decision   # let select_strategy honour its suggestion
-    if decision.get("action") == "SKIP":
-        reason = decision.get("reasoning", "")[:200]
+    result["veto"] = verdict
+    if verdict.get("action") == "VETO":
+        reason = verdict.get("reasoning", "")[:240]
         logger.info(f"🛑 {index_key} LLM vetoed entry: {reason}")
-        events.warning("gate.llm_veto", f"AI second opinion said no to {index_key}",
+        events.warning("gate.llm_veto", f"AI reviewer said no to {index_key}",
                        reason, index=index_key)
         return False
     return True
@@ -331,7 +393,21 @@ def _llm_approves_entry(STATE: dict, index_key: str, result: dict) -> bool:
 # ─────────────────────────────────────────
 
 def handle_enter(STATE: dict, index_key: str, result: dict):
-    """Build and open a strategy-agnostic paper position for one index."""
+    """
+    Build and open a paper position for one index.
+
+    Order matters here and each step exists because of a loss the old order
+    produced:
+      1. hard risk checks
+      2. pick the strategy in code (an LLM suggestion is used only if it fits)
+      3. build ONE lot to learn the real stop distance and the real margin
+      4. size from those, never forced to a lot, capped
+      5. build the sized trade and re-price it from a fresh quote, with slippage
+      6. show the LLM that exact trade and let it veto
+      7. enter
+    """
+    from utils.angel_helper import fetch_quotes, fetch_required_margin
+
     rm = STATE["risk_manager"]
     pt = STATE["paper_trader"]
     idx        = INDICES[index_key]
@@ -341,56 +417,83 @@ def handle_enter(STATE: dict, index_key: str, result: dict):
     options_df = result["options_df"]
     confluence = result["confluence"]
     regime     = result["regime"]
-    decision   = result["decision"]
+    decision   = result.get("decision") or {}
     greeks     = result.get("greeks")
 
-    # Reference premium for rough sizing (real margin is applied in approve_trade)
-    ref_price = float(summary.get("atm_ce_ltp", 0)) + float(summary.get("atm_pe_ltp", 0))
-    if ref_price <= 0:
-        logger.warning(f"⚠️ {index_key} entry skipped — no ATM premium available.")
-        return
+    def blocked(body: str):
+        logger.warning(f"🚫 {index_key} entry blocked: {body}")
+        events.warning("trade.blocked", f"{index_key} trade blocked", body, index=index_key)
 
-    approval = rm.approve_trade(pt.capital, ref_price, lot_size,
-                                open_count=pt.open_count())
-    if not approval["approved"]:
-        logger.warning(f"🚫 {index_key} entry blocked: {approval['reason']}")
-        events.warning("trade.blocked", f"{index_key} trade blocked",
-                       approval["reason"], index=index_key)
-        return
+    # 1 ── hard checks
+    ok, reason = rm.pre_trade_checks(open_count=pt.open_count())
+    if not ok:
+        return blocked(reason)
 
-    lots     = approval["lots"]
+    # 2 ── the strategy, from the confirmed view
     strategy = strategies.select_strategy(confluence, regime, decision)
 
-    # Refine lots against the REAL margin Angel would require for these legs
-    lots = rm.cap_lots_by_margin(
-        obj=STATE.get("obj"), index=index_key, strategy=strategy,
-        summary=summary, df_oi=df_oi, options_df=options_df,
-        lot_size=lot_size, expiry=result["expiry"],
-        capital=pt.capital, max_lots=lots, greeks=greeks,
+    # 3 ── one lot, to learn what this trade actually risks and needs
+    probe = strategies.build_position(
+        index=index_key, strategy=strategy, summary=summary, df_oi=df_oi,
+        options_df=options_df, lots=1, lot_size=lot_size, expiry=result["expiry"],
+        greeks=greeks,
     )
-    if lots < 1:
-        logger.warning(f"🚫 {index_key} entry blocked: margin exceeds allocation.")
-        events.warning("trade.blocked", f"{index_key} trade blocked",
-            "The broker margin for this trade is more than the per-trade limit "
-            "allows, even at one lot.", index=index_key)
-        return
+    if not probe:
+        return blocked(f"Could not price a tradable {strategy.replace('_', ' ')} — the "
+                       f"strikes were illiquid or the premium was too thin.")
+    margin_per_lot = fetch_required_margin(STATE.get("obj"), probe["legs"], lot_size=lot_size)
+    if margin_per_lot is None:
+        logger.warning(f"⚠️ {index_key}: broker margin unavailable — sizing by risk and cap only.")
 
+    # 4 ── size
+    sizing = rm.lots_for(probe["stop_loss_pnl"], margin_per_lot, pt.capital)
+    lots = sizing["lots"]
+    if lots < 1:
+        return blocked(sizing["reason"])
+
+    # 5 ── the sized trade, priced from the market as it is right now
     position = strategies.build_position(
-        index=index_key, strategy=strategy, summary=summary,
-        df_oi=df_oi, options_df=options_df, lots=lots,
-        lot_size=lot_size, expiry=result["expiry"], greeks=greeks,
+        index=index_key, strategy=strategy, summary=summary, df_oi=df_oi,
+        options_df=options_df, lots=lots, lot_size=lot_size, expiry=result["expiry"],
+        greeks=greeks,
     )
     if not position:
-        events.warning("trade.blocked", f"{index_key} trade blocked",
-            f"Could not price a tradable {strategy.replace('_', ' ')} — the "
-            f"strikes were illiquid or the premium was too thin.", index=index_key)
+        return blocked(f"Could not price a tradable {strategy.replace('_', ' ')}.")
+
+    fresh = {}
+    fresh.update(fetch_quotes(STATE.get("obj"), strategies.all_tokens(position)))
+    for leg in position["legs"]:                       # a live tick beats a quote
+        live = TICK_STORE.get_ltp(leg["token"], max_age=strategies.TICK_MAX_AGE_SEC)
+        if live:
+            fresh[leg["token"]] = live
+    try:
+        slippage = float(settings_store.get("paper_slippage_pct"))
+    except Exception:
+        slippage = 0.0
+    before = position["net_credit"]
+    strategies.reprice_entry(position, fresh, slippage_pct=slippage)
+    drift = round(position["net_credit"] - before, 2)
+    if position["direction"] == "SELL":
+        min_credit = strategies._tuned("min_credit_pct", strategies.MIN_CREDIT_PCT)
+        spot = float(summary.get("nifty_spot") or 0)
+        if spot and position["net_credit"] < min_credit * spot:
+            return blocked(f"The premium had moved away by the time of entry "
+                           f"(₹{position['net_credit']} after slippage is too thin).")
+    position["margin_per_lot"] = margin_per_lot
+    position["sizing"]         = sizing
+    position["hold_mode"]      = _hold_mode()
+
+    # 6 ── the reviewer sees exactly this trade
+    proposal = {**{k: v for k, v in position.items() if k != "legs"},
+                "legs": position["legs"], "hold_plan": hold_plan_text()}
+    if not _llm_approves_entry(STATE, index_key, result, proposal):
         return
 
+    # 7 ── enter
     trade = pt.enter(position)
     if not trade:
         return
 
-    # Subscribe all leg tokens for live tick monitoring
     ws = STATE.get("ws_feed")
     if ws:
         ws.subscribe("NFO", strategies.all_tokens(position))
@@ -406,19 +509,25 @@ def handle_enter(STATE: dict, index_key: str, result: dict):
         f"  {l['action']} {l['option_type']} {int(l['strike'])} @ ₹{l['entry_ltp']}"
         for l in position["legs"]
     )
+    veto = result.get("veto") or {}
     events.success(
         "trade.enter", f"Opened a {strategy.replace('_', ' ')} on {index_key}",
-        f"Lots      : {lots} × {lot_size}\n"
+        f"Lots      : {lots} × {lot_size} ({sizing['reason']})\n"
         f"Legs:\n{legs_txt}\n"
-        f"Net Prem  : ₹{position['net_credit']} ({position['direction']})\n"
+        f"Net Prem  : ₹{position['net_credit']} ({position['direction']}), "
+        f"priced {position['priced_from']}"
+        + (f", moved ₹{drift:+} since the scan" if drift else "") + "\n"
         f"Stop Loss : ₹{position['stop_loss_pnl']} P&L\n"
         f"Target    : ₹{position['target_pnl']} P&L\n"
-        f"📝 {decision.get('reasoning', '')[:200]}",
+        f"Plan      : {hold_plan_text()}\n"
+        f"📝 {veto.get('reasoning', '')[:200]}",
         index=index_key,
         meta={"strategy": strategy, "lots": lots, "lot_size": lot_size,
               "net_credit": position["net_credit"],
               "stop_loss_pnl": position["stop_loss_pnl"],
               "target_pnl": position["target_pnl"],
+              "priced_from": position["priced_from"], "drift": drift,
+              "sizing": sizing, "hold_mode": position["hold_mode"],
               "legs": [{"action": l["action"], "type": l["option_type"],
                         "strike": l["strike"], "entry": l["entry_ltp"]}
                        for l in position["legs"]]},
@@ -437,10 +546,23 @@ def handle_exit(STATE: dict, index_key: str, reason: str, df_oi=None):
     if not position:
         return
 
-    price_map = strategies.current_price_map(position, TICK_STORE, df_oi)
+    price_map = strategies.current_price_map(
+        position, TICK_STORE, df_oi, max_tick_age=strategies.TICK_MAX_AGE_SEC)
+    if not strategies.price_map_complete(position, price_map):
+        # Time-based and manual exits must go through regardless. Take any
+        # tick however old before assuming a leg is flat, and say so.
+        price_map = strategies.current_price_map(position, TICK_STORE, df_oi, max_tick_age=None)
+    unpriced = strategies.missing_legs(position, price_map)
+
     trade = pt.exit(index_key, price_map, reason=reason)
     if not trade:
         return
+    if unpriced:
+        events.warning("position.exit_unpriced",
+            f"{index_key} closed with a leg priced at its entry",
+            f"No price at all was available for {', '.join(unpriced)}, so that leg "
+            f"was booked flat. The recorded P&L for this trade is approximate.",
+            index=index_key)
 
     total_pnl = trade["pnl"]
     rm.close_position(f"{index_key}{int(position['legs'][0]['strike'])}", total_pnl)

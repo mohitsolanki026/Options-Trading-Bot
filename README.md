@@ -28,9 +28,11 @@ It scans NIFTY and BANKNIFTY every five minutes, decides in code whether a trade
 - **Scans every five minutes** during market hours. Each index gets a full read: the option chain and open interest, Greeks, IV rank, the market regime, and a technical read from RSI, MACD, EMA, Supertrend and VWAP.
 - **Gates every entry in code.** Ten checks must all pass before anything opens. The LLM can object to a trade, but it can never force one.
 - **Sizes against real margin.** Lot counts are capped by what Angel One's margin calculator says the legs would block.
-- **Manages positions on live ticks.** A one-second loop watches each open position against its stop loss and target, and anything still open is closed before the market shuts.
+- **Manages positions on live ticks.** A one-second loop watches each open position against its stop loss and target. By default a trade is held for days, to its target, its stop, or the morning of expiry. An intraday mode that flattens before the close is still available.
 - **Trades several indices at once**, holding at most one position per index and capping correlated short-premium bets.
+- **Sizes from the real stop.** Lots come from what the actual trade can lose at its stop and what the broker would block, never forced to one lot, and capped while the paper record is short.
 - **Protects the day.** Hitting the daily loss limit halts new trades, and that halt survives a restart.
+- **Keeps the paper honest.** Entries are repriced from a fresh quote, every fill is worsened by an assumed spread, and charges come off at exit.
 - **Explains itself.** The dashboard answers "why didn't it trade?" in plain English, and Telegram carries the alerts.
 
 ## The dashboard
@@ -80,6 +82,7 @@ The layout collapses to a single column with a tab bar along the bottom.
 | Control | What happens |
 |---|---|
 | Stop taking new trades | Blocks new entries straight away, after a confirmation. Open positions keep being managed. |
+| How long trades are held | On the Settings screen. Positional is the default; intraday flattens everything before the close. |
 | Start taking trades again | Refused while the daily loss limit is still breached. |
 | Close this trade now | Needs a second tap. The close is queued and carried out by the tick loop within about a second. |
 | Check the market now | Runs the full scan immediately instead of waiting for the next cycle. |
@@ -145,24 +148,26 @@ Each signal only scores when it carries an edge. A reading in the ordinary middl
 | Put-call ratio | It sits at an extreme, above 1.2 or below 0.8 | 1 or 2 |
 | Open interest | Spot is pressed against support or resistance | 1 |
 | IV rank | Options are rich, 55 or above, or cheap, 30 or below, against their own history | 2 |
-| India VIX | The market is very calm, below 12, or fearful, above 22 | 1 |
-| Time decay | Two days or fewer remain to expiry | 1 |
+| India VIX | Outright fear above 22, or its percentile against recent months is high or low | 1 |
+| Time decay | Three to ten days remain to expiry, or one point out to 35 days | 2 |
 | Technicals | Three or more of the indicators agree | 2 |
 
-Until an index has ten days of recorded IV history, its IV rank falls back to India VIX's own percentile, and premium selling stays blocked if neither is available.
+Time decay is a condition rather than a view. It never decides which way the bias leans, and its points only count for a premium-selling trade, where decay is the profit. Two days or fewer to expiry scores nothing at all: that is where a small move swings option prices the most.
+
+Until an index has sixty days of recorded IV history, its IV rank falls back to India VIX's own percentile, and premium selling stays blocked if neither is available. While the VIX percentile is standing in, the VIX signal does not count it a second time.
 
 ### The ten entry checks
 
 | Check | Rule by default |
 |---|---|
-| Enough signals agree | A score of at least 4 out of 9 |
+| Enough signals agree | A score of at least 4 out of 10 |
 | One view clearly won | The leading view is ahead of the opposing one by 2 points or more |
 | Options are pricey enough to sell | IV rank of 55 or more, for premium-selling trades only |
 | Trading is switched on | Not paused by you, and not halted by the loss limit |
 | Loss budget has room | Today's realised loss is inside the daily limit |
 | A free slot | Fewer than 3 positions open across all indices |
 | Inside trading hours | Between 09:40 and 14:00 |
-| Not an expiry or event day | Not the index's expiry day, and not a configured event date |
+| Not an expiry or event day | More than two days to the index's expiry, and not a configured event date |
 | Cooling-off period is over | 30 minutes since the last exit on that index |
 | Not the same bet twice | No other short-premium position across NIFTY, BANKNIFTY and FINNIFTY |
 
@@ -174,14 +179,16 @@ Every trade is a list of legs, so profit and loss, stops and targets work the sa
 
 | Strategy | Legs | Used when the signals lean towards | Stop loss | Target |
 |---|---|---|---|---|
-| Short strangle | Sell an out-of-the-money call and put, strikes picked near 0.16 delta | Selling expensive options | 40% | 50% |
+| Short strangle | Sell an out-of-the-money call and put, strikes picked near 0.16 delta | Selling expensive options | 100% | 50% |
 | Long straddle | Buy the at-the-money call and put | Buying cheap options | 40% | 60% |
 | Bull call spread | Buy the at-the-money call, sell the next call up | The market rising | 50% | 80% |
 | Bear put spread | Buy the at-the-money put, sell the next put down | The market falling | 50% | 80% |
-| Short straddle | Sell the at-the-money call and put | An LLM suggestion | 40% | 50% |
+| Short straddle | Sell the at-the-money call and put | An LLM suggestion | 100% | 50% |
 | Long call, long put | Buy one at-the-money option | An LLM suggestion | 40% | 60% |
 
-The stop loss and target are shares of the premium collected or paid. Within a day of expiry both tighten, the stop to 80% of its usual size and the target to 70%. Legs with open interest under 500 are skipped, and a sold position must collect at least 0.4% of the index price.
+The stop loss and target are shares of the premium collected or paid. For sold premium, a 100% stop means the premium has doubled. The old 40% stop was hit by ordinary intraday noise long before any decay could arrive. Both figures for sold premium are editable on the Settings screen. Legs with open interest under 500 are skipped, and a sold position must collect at least 0.4% of the index price.
+
+An LLM suggestion is only used when it expresses the same view the checks confirmed. A "short straddle" suggested against a bearish read is ignored and the bear put spread is placed instead.
 
 ### A trading day
 
@@ -190,10 +197,11 @@ The stop loss and target are shares of the premium collected or paid. Within a d
 | 08:30 | Log in to Angel One, load the instrument list, start the price feed, restore any open positions |
 | 08:45 | Pre-market snapshot of each index and India VIX |
 | 09:30 | Opening scan of every watched index |
-| 09:30 to 15:30 | The five-minute monitor cycle and the one-second tick monitor |
+| 09:15 to 15:30 | The one-second tick monitor, from the opening bell so an overnight gap is caught at once |
+| 09:30 to 15:30 | The five-minute monitor cycle |
 | 12:00 | Midday pulse |
-| 14:30 to 15:00 | Anything still open is closed, so nothing is carried overnight |
-| 15:30 | End-of-day report |
+| 14:30 to 15:00 | Intraday mode only: anything still open is closed |
+| 15:30 | End-of-day report. In positional mode, open trades are carried overnight |
 
 Scheduled jobs skip weekends. There is no exchange holiday calendar, so on a market holiday the jobs still run and simply find nothing to trade.
 
@@ -243,13 +251,19 @@ Environment values are **defaults**. Anything you change on the dashboard's Sett
 | `MAX_DAILY_LOSS` | `-25000` | Realised loss that halts trading for the day |
 | `MAX_PER_TRADE_LOSS` | `-10000` | Used when sizing a position |
 | `MAX_OPEN_POSITIONS` | `3` | Across all indices |
+| `MAX_LOTS_PER_TRADE` | `2` | A hard cap on top of risk-based sizing |
+| `HOLD_MODE` | `positional` | `positional` holds to target, stop, or expiry morning; `intraday` flattens before the close |
+| `MAX_HOLD_DAYS` | `5` | Positional mode: a trade is closed on the day this is reached |
+| `SHORT_PREMIUM_STOP_PCT`, `SHORT_PREMIUM_TARGET_PCT` | `1.0`, `0.5` | Stop and target on sold premium, as a share of the credit |
+| `PAPER_SLIPPAGE_PCT` | `0.005` | Paper fills worsened by this share of the price, per leg, in and out |
+| `PAPER_CHARGES_PER_ORDER` | `25` | Flat charges deducted per order leg |
 | `ENTRY_WINDOW_START`, `ENTRY_WINDOW_END` | `09:40`, `14:00` | When new trades may open |
 | `ENTRY_COOLDOWN_MIN` | `30` | Minutes before re-entering an index after an exit |
-| `EXPIRY_BLACKOUT_DTE` | `0` | Block entries at or below this many days to expiry |
+| `EXPIRY_BLACKOUT_DTE` | `2` | Block entries at or below this many days to expiry |
 | `EVENT_BLACKOUT_DATES` | | Comma-separated ISO dates, such as budget day or RBI policy |
-| `ENTRY_THRESHOLD` | `4` | Signal points needed, out of 9 |
+| `ENTRY_THRESHOLD` | `4` | Signal points needed, out of 10 |
 | `IV_RANK_SELL`, `IV_RANK_BUY` | `55`, `30` | IV rank levels for selling and buying premium |
-| `IV_MIN_HISTORY` | `10` | Days of IV history before an index's own IV rank is trusted |
+| `IV_MIN_HISTORY` | `60` | Days of IV history before an index's own IV rank is trusted |
 | `MIN_LEG_OI`, `MIN_CREDIT_PCT` | `500`, `0.004` | Liquidity and minimum-premium filters |
 | `STRANGLE_TARGET_DELTA` | `0.16` | How far out of the money strangle legs sit |
 | `TELEGRAM_ENABLED` | `1` | Set `0` to keep alerts in the dashboard only |
@@ -349,11 +363,27 @@ Every endpoint except `/healthz` and the login needs the token, sent either as t
 
 The bot is a long-running, stateful process with background threads, so it belongs on a VM under systemd rather than a serverless platform. [DEPLOY.md](DEPLOY.md) walks through a Google Compute Engine setup in the Mumbai region, the service file, reaching the dashboard safely, and backups.
 
+## Why it was losing, and what changed
+
+The first eleven weeks of paper trading closed 72 trades at a 42% hit rate, with the average loss almost twice the average win. Every one of those trades was flattened before the close, so a sold strangle had a few hours to collect decay that takes days, while its 40% stop was inside a normal afternoon's range. Targets were almost never reached; stops and small end-of-day exits were the whole distribution.
+
+What changed:
+
+- Trades are now held for days by default, and closed on the morning of expiry or at a hold limit.
+- The stop on sold premium is 100% of the credit, not 40%, and a good expiry date means three to ten days out, not two or fewer.
+- A very low VIX no longer counts as a reason to sell. Both the VIX and the index's IV are read against their own history, and the same reading is never counted twice.
+- Lots are sized from the trade's real stop distance, never forced to one, and capped.
+- A leg with no fresh price no longer fires a stop, old ticks expire, entries are repriced from a fresh quote with slippage, and charges are deducted.
+- The LLM reviews the exact trade the code built, and can only approve or veto it.
+
+None of this is a fitted result. It removes the structural reasons the old record had to lose. Judge it on a fresh paper record.
+
 ## Safety
 
 - **No real orders.** Live order placement has not been built. Before it is, fills, slippage and partial fills would all need modelling and verifying.
+- **Positions are carried overnight by default.** That is what lets sold premium decay, and it is also where gap risk lives. The tick monitor runs from the opening bell to catch a gap at once, sizing is capped, and `HOLD_MODE=intraday` restores the old flatten-before-close behaviour.
 - **Keep the dashboard private.** It can close positions. It binds to loopback by default and requires a token. Reach it over Tailscale or an SSH tunnel as described in [DEPLOY.md](DEPLOY.md), and never open its port to the internet.
 - **Secrets stay out of git.** `.env` and everything in `data/` are ignored.
 - **The daily halt is durable.** It is saved with the date, so a crash or restart cannot clear it, and each new day still starts clean.
 - **The LLM fails open.** If the LLM is unreachable, a trade that passed all ten checks still goes ahead. The code gate, not the LLM, is the safety net.
-- **Calibrate before trusting it.** The signal weights and thresholds are reasoned defaults, not fitted parameters. Let it run on paper for several weeks and check the results before drawing conclusions.
+- **Calibrate before trusting it.** The signal weights and thresholds are reasoned defaults, not fitted parameters. Let it run on paper for several weeks and check the results before drawing conclusions, and before raising the lot cap.

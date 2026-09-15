@@ -133,6 +133,7 @@ class RiskManager:
             self.max_open_positions    = settings_store.get("max_open_positions")
             self.max_capital_per_trade = settings_store.get("max_capital_per_trade")
             self.max_correlated_short  = settings_store.get("max_correlated_short")
+            self.max_lots_per_trade    = settings_store.get("max_lots_per_trade")
             self._settings_version     = version
             return True
         except Exception as e:
@@ -142,6 +143,7 @@ class RiskManager:
             self.max_open_positions    = RISK_RULES["max_open_positions"]
             self.max_capital_per_trade = RISK_RULES["max_capital_per_trade"]
             self.max_correlated_short  = MAX_CORRELATED_SHORT
+            self.max_lots_per_trade    = 2
             return False
 
     # ── DURABLE HALT STATE ────────────────
@@ -308,7 +310,72 @@ class RiskManager:
         return result
 
 
-    # ── TRADE GATE (main approval function) ──
+    # ── TRADE GATE ────────────────────────
+
+    def pre_trade_checks(self, open_count: int = None) -> tuple:
+        """The hard stops on their own: halted, daily loss, slots, time zone."""
+        for passed, reason in (
+            self.check_trading_halted(),
+            self.check_daily_loss_limit(),
+            self.check_position_limit(open_count),
+            self.check_no_trade_zone(),
+        ):
+            if not passed:
+                logger.warning(f"🚫 Trade BLOCKED: {reason}")
+                return False, reason
+        return True, "OK"
+
+    def lots_for(self, stop_loss_per_lot: float, margin_per_lot, capital: float) -> dict:
+        """
+        How many lots the risk rules allow for a CONCRETE trade.
+
+        Sizing used to divide the per-trade loss limit by half the ATM straddle
+        premium, a proxy that had nothing to do with the trade being placed,
+        and then forced at least one lot even when that one lot risked more
+        than the limit. Now:
+          * by risk   — the per-trade loss limit over this trade's actual stop
+          * by margin — the capital allocation over the broker margin per lot
+          * capped    — by the "most lots in one trade" setting
+        Zero lots means "do not take it", never "take one anyway".
+        """
+        risk_cap   = abs(self.max_per_trade_loss)
+        allocation = capital * self.max_capital_per_trade
+        stop       = abs(float(stop_loss_per_lot or 0))
+        by_risk    = int(risk_cap // stop) if stop > 0 else 0
+        by_margin  = (int(allocation // margin_per_lot)
+                      if margin_per_lot and margin_per_lot > 0 else None)
+        cap        = getattr(self, "max_lots_per_trade", 2)
+        candidates = [by_risk, cap] + ([by_margin] if by_margin is not None else [])
+        lots       = max(0, min(candidates))
+
+        if lots < 1:
+            if by_risk < 1:
+                reason = (f"One lot could lose ₹{stop:,.0f} at its stop, more than the "
+                          f"₹{risk_cap:,.0f} allowed on a single trade.")
+            else:
+                reason = (f"One lot needs ₹{margin_per_lot:,.0f} of margin, more than the "
+                          f"₹{allocation:,.0f} allocation allows.")
+        else:
+            binding = ("the per-trade loss limit" if lots == by_risk
+                       else "the lot cap" if lots == cap else "the margin allocation")
+            reason = f"{lots} lot(s), limited by {binding}."
+        logger.info(f"📐 Sizing: risk→{by_risk} margin→{by_margin} cap→{cap} = {lots}")
+        return {"lots": lots, "by_risk": by_risk, "by_margin": by_margin, "cap": cap,
+                "allocation": round(allocation, 2), "risk_cap": risk_cap,
+                "stop_per_lot": round(stop, 2), "margin_per_lot": margin_per_lot,
+                "reason": reason}
+
+    def sync_positions(self, open_trades: dict):
+        """
+        Rebuild the local position cache from the paper trader, the single
+        source of truth. After a restart this cache is empty even though
+        positions were restored, which made every later close log a warning.
+        """
+        known = {p["symbol"] for p in self.open_positions}
+        for index_key, pos in (open_trades or {}).items():
+            symbol = f"{index_key}{int(pos['legs'][0]['strike'])}"
+            if symbol not in known:
+                self.add_position(symbol, pos["entry_combined"], pos["lots"], pos["direction"])
 
     def approve_trade(self, capital: float, option_price: float,
                       lot_size: int = None, open_count: int = None) -> dict:

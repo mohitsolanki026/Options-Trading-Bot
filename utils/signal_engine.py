@@ -92,22 +92,62 @@ def signal_iv_rank(iv_rank, sell_at=None, buy_at=None) -> dict:
     return {"score": 0, "label": "IV Rank", "value": f"{iv_rank} out of 100 — priced about normally", "bias": "NEUTRAL"}
 
 
-def signal_vix(vix: float) -> dict:
-    """VIX only carries edge at extremes; the calm/normal middle scores 0."""
+def signal_vix(vix: float, vix_rank=None) -> dict:
+    """
+    India VIX, read against its own history rather than as an absolute level.
+
+    A very low VIX used to score a point for selling premium. That is when the
+    premium on offer is thinnest and a volatility expansion hurts the most, and
+    the journal showed the bot entering at the lowest IV readings it saw. Now:
+    an outright fearful market (> 22) still says buy protection; otherwise the
+    VIX percentile decides, and only when it is supplied independently of the
+    IV-rank signal so the same reading is not counted twice.
+    """
     if vix is None:
         return {"score": 0, "label": "VIX", "value": "No reading available", "bias": "NEUTRAL"}
-    if vix < 12:
-        return {"score": 1, "label": "VIX", "value": f"India VIX {vix} — a very calm market", "bias": "SELL_PREMIUM"}
     if vix > 22:
         return {"score": 1, "label": "VIX", "value": f"India VIX {vix} — the market is fearful", "bias": "BUY_OPTIONS"}
-    return {"score": 0, "label": "VIX", "value": f"India VIX {vix} — an ordinary reading", "bias": "NEUTRAL"}
+    if vix_rank is None:
+        return {"score": 0, "label": "VIX",
+                "value": f"India VIX {vix} — no independent read on whether that is high for it",
+                "bias": "NEUTRAL"}
+    if vix_rank >= 60:
+        return {"score": 1, "label": "VIX",
+                "value": f"India VIX {vix}, in the top {100 - int(vix_rank)}% of its recent range — volatility is dear",
+                "bias": "SELL_PREMIUM"}
+    if vix_rank <= 25:
+        return {"score": 1, "label": "VIX",
+                "value": f"India VIX {vix}, in the bottom {int(vix_rank)}% of its recent range — volatility is cheap",
+                "bias": "BUY_OPTIONS"}
+    return {"score": 0, "label": "VIX", "value": f"India VIX {vix} — ordinary for recent months", "bias": "NEUTRAL"}
 
 
 def signal_theta_expiry(days_to_expiry: int) -> dict:
-    """Near expiry, accelerating theta favours short premium."""
-    if days_to_expiry is not None and days_to_expiry <= 2:
-        return {"score": 1, "label": "Theta", "value": ("Expires today, so value drains fastest" if days_to_expiry == 0 else f"{days_to_expiry} day(s) to expiry, value drains fast"), "bias": "SELL_PREMIUM"}
-    return {"score": 0, "label": "Theta", "value": f"{days_to_expiry} days to expiry, value drains slowly", "bias": "NEUTRAL"}
+    """
+    Days to expiry, scored for a trade that is HELD rather than scalped.
+
+    The old rule rewarded two days or fewer, which is where a small index move
+    swings option prices the most. For a position held for several days the
+    sweet spot is three to ten days out: decay is meaningful, gamma is
+    manageable. Anything closer is a gamma trap and scores nothing.
+    """
+    d = days_to_expiry
+    if d is None:
+        return {"score": 0, "label": "Theta", "value": "Expiry unknown", "bias": "NEUTRAL"}
+    if d <= 2:
+        return {"score": 0, "label": "Theta",
+                "value": f"{d} day(s) to expiry — too close, small moves swing the price hard",
+                "bias": "NEUTRAL"}
+    if d <= 10:
+        return {"score": 2, "label": "Theta",
+                "value": f"{d} days to expiry — decay is meaningful and manageable",
+                "bias": "SELL_PREMIUM"}
+    if d <= 35:
+        return {"score": 1, "label": "Theta",
+                "value": f"{d} days to expiry — decay is slow but steady",
+                "bias": "SELL_PREMIUM"}
+    return {"score": 0, "label": "Theta", "value": f"{d} days to expiry — too far out for decay to matter",
+            "bias": "NEUTRAL"}
 
 
 def signal_ta(ta: dict) -> dict:
@@ -123,8 +163,8 @@ def signal_ta(ta: dict) -> dict:
     return {"score": 0, "label": "TA", "value": f"Mixed, {bull} up against {bear} down", "bias": "NEUTRAL"}
 
 
-# Max achievable weighted score = 2+1+2+1+1+2 = 9
-MAX_SCORE = 9
+# Max achievable weighted score = PCR 2 + OI 1 + IV rank 2 + VIX 1 + theta 2 + TA 2
+MAX_SCORE = 10
 
 
 # ─────────────────────────────────────────
@@ -141,6 +181,8 @@ def run_confluence(
     regime: str,
     iv_rank=None,
     ta: dict = None,
+    vix_rank=None,
+    iv_rank_source: str = "index",
     # kept for backwards-compat with old callers (ignored):
     sentiment: str = None, avg_iv: float = None, theta: float = None,
 ) -> dict:
@@ -149,22 +191,30 @@ def run_confluence(
     Returns dict with: score, max_score, threshold, overall_bias, bias_confirmed,
     iv_rank, premium_sell_ok, signals, regime.
     """
+    # When the IV rank is itself the VIX percentile (no per-index history yet),
+    # feeding the same number to the VIX signal would count it twice.
+    independent_vix_rank = vix_rank if iv_rank_source == "index" else None
     signals = [
         signal_pcr(pcr),
         signal_oi_position(support, resistance, nifty_spot),
         signal_iv_rank(iv_rank),
-        signal_vix(vix),
+        signal_vix(vix, independent_vix_rank),
         signal_theta_expiry(days_to_expiry),
         signal_ta(ta or {}),
     ]
 
     threshold = _tuned("entry_threshold", ENTRY_THRESHOLD)
     sell_at   = _tuned("iv_rank_sell", IV_RANK_SELL)
-    total_score = sum(s["score"] for s in signals)
-
-    # Weighted votes per bias
+    # Days-to-expiry is a condition, not a view: it says whether decay can be
+    # collected, not which way anything is leaning. So it never votes on the
+    # bias, and its points only count for a premium-selling trade, where decay
+    # is the whole profit. Otherwise a good expiry date could pad a thin
+    # directional setup over the threshold on its own.
+    theta = signals[4]
     votes = {"BULLISH": 0, "BEARISH": 0, "SELL_PREMIUM": 0, "BUY_OPTIONS": 0}
     for s in signals:
+        if s is theta:
+            continue
         if s["bias"] in votes:
             votes[s["bias"]] += s["score"]
 
@@ -183,6 +233,10 @@ def run_confluence(
         margin = 0
 
     bias_confirmed = margin >= BIAS_MARGIN
+    theta["counted"] = overall_bias == "SELL_PREMIUM"
+    if not theta["counted"] and theta["score"]:
+        theta["value"] += " (only counts for a premium-selling trade)"
+    total_score = sum(s["score"] for s in signals if s.get("counted", True))
     # Selling premium is only OK when IV is genuinely rich.
     premium_sell_ok = (iv_rank is not None and iv_rank >= sell_at)
 
@@ -198,6 +252,8 @@ def run_confluence(
         "bias_confirmed":  bias_confirmed,
         "bias_margin":     margin,
         "iv_rank":         iv_rank,
+        "iv_rank_source":  iv_rank_source,
+        "vix_rank":        vix_rank,
         "premium_sell_ok": premium_sell_ok,
         "votes":           votes,
         "signals":         signals,

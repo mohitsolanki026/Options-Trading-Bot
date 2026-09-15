@@ -120,6 +120,31 @@ def fetch_required_margin(obj, legs, lot_size: int = None, exchange: str = "NFO"
     return None
 
 
+def fetch_quotes(obj, tokens: list, exchange: str = "NFO") -> dict:
+    """
+    Fresh last-traded prices for a handful of tokens, as ``{token: ltp}``.
+
+    Used right before a paper entry so the fill reflects the market now, not
+    the option chain snapshot from the start of the scan. Any failure returns
+    an empty dict and the caller falls back to the snapshot.
+    """
+    if not obj or not tokens:
+        return {}
+    try:
+        resp = obj.getMarketData("LTP", {exchange: [str(t) for t in tokens]})
+    except Exception as e:
+        logger.warning(f"⚠️ Fresh quote fetch failed: {e}")
+        return {}
+    out = {}
+    if resp and resp.get("status"):
+        for item in (resp.get("data", {}) or {}).get("fetched", []) or []:
+            token = str(item.get("symbolToken", ""))
+            ltp   = item.get("ltp")
+            if token and ltp:
+                out[token] = float(ltp)
+    return out
+
+
 def fetch_market_data(obj, exchange, symbol, token):
     """Fetch full quote — OHLC, volume, OI etc."""
     try:
