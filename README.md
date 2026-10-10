@@ -1,11 +1,8 @@
 # NIFTY Options Trading Bot
 
-An automated paper-trading bot for Indian index options on Angel One, with a live web dashboard called **Theta Desk**.
+An automated trading bot for Indian index options on Angel One, with a live web dashboard called **Theta Desk**.
 
 It scans NIFTY and BANKNIFTY every five minutes, decides in code whether a trade has a real edge, sizes it against the margin the broker would actually block, and manages every open position on live ticks until it hits its stop loss, its target, or the end of the day. An LLM is consulted once per trade, and only as a veto.
-
-> [!IMPORTANT]
-> **Paper trading only.** The bot places no real orders. It reads live prices and real margin from Angel One and simulates the fills. Nothing in this repository is financial advice.
 
 ![Theta Desk, the Today screen](docs/images/today.png)
 
@@ -132,7 +129,7 @@ flowchart TD
     D -- yes --> E{"LLM objects?"}
     E -- yes --> R
     E -- "no, or LLM unavailable" --> F["Pick a strategy and size it<br/>against real Angel margin"]
-    F --> G["Open the paper position"]
+    F --> G["Open the position"]
     G --> H["Tick monitor manages it<br/>stop loss, target, end of day"]
 ```
 
